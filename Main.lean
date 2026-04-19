@@ -24,11 +24,14 @@ inductive JQuery where
   | delete : (Juser → Bool) → JQuery
 
 inductive SQuery where
-  | select : (Juser → Bool) → SQuery
+  | select : (Suser → Bool) → SQuery
   | drop : (Juser → Bool) → SQuery
 
+def jpred_to_spred (p : Juser → Bool) : Suser → Bool :=
+  fun r => p {name := r.1, age := r.2}
+
 def jqueryToSquery : JQuery → SQuery
-  | .find p => .select p
+  | .find p => .select (jpred_to_spred p)
   | .delete p => .drop p
 
 def eval_jquery (jd : JDB) : JQuery → JDB
@@ -36,7 +39,7 @@ def eval_jquery (jd : JDB) : JQuery → JDB
   | .delete p => jd.filter (fun u => ¬ p u)
 
 def eval_squery (sd : SDB) : SQuery → SDB
-  | .select p => sd.filter (fun r => p {name := r.1, age := r.2})
+  | .select p => sd.filter (fun r => p r)
   | .drop p => sd.filter (fun r => ¬ p {name := r.1, age := r.2})
 
 theorem jdbToSdb_filter (jd: JDB) (p: Juser → Bool) :
@@ -52,20 +55,22 @@ theorem jdbToSdb_filter (jd: JDB) (p: Juser → Bool) :
       · rename_i h
         simp [h, ih]
 
-theorem sdbToJdb_filter (sd: SDB) (p: Juser → Bool) :
-    sdbToJdb (sd.filter (fun r => p {name := r.1, age := r.2})) =
+theorem sdbToJdb_filter (sd : SDB) (p : Juser → Bool) :
+    sdbToJdb (sd.filter (fun r => p { name := r.1, age := r.2 })) =
     (sdbToJdb sd).filter p := by
   induction sd with
-  | nil => simp [sdbToJdb, List.filter]
-  | cons x xs ih =>
-      match x with
+  | nil =>
+      simp [sdbToJdb, List.filter]
+  | cons r rs ih =>
+      match r with
       | (n, a) =>
           simp [List.filter, sdbToJdb]
           split
-          · rename_i h
-            simp [sdbToJdb, ih]
-          · rename_i h
-            simp [ih]
+          · rename_i h_true
+            simp [sdbToJdb]
+            rw [ih]
+          · rename_i h_false
+            exact ih
 
 theorem delete_equiv1 (jd : JDB) (sd : SDB) (p : Juser → Bool) (h : equiv jd sd) :
     jdbToSdb (eval_jquery jd (.delete p)) = eval_squery sd (.drop p) := by
@@ -94,7 +99,10 @@ theorem query_equiv1 (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
   cases jq with
   | find p =>
       simp [eval_jquery, eval_squery, jqueryToSquery]
-      rw [jdbToSdb_filter, h_to_sdb]
+      -- We use the lemma to show that filtering tuples is same as filtering Users
+      simp [jpred_to_spred]
+      rw [jdbToSdb_filter jd p]
+      grind
   | delete p =>
       simp [eval_jquery, eval_squery, jqueryToSquery]
       rw [jdbToSdb_filter jd (fun u => !(p u))]
@@ -107,7 +115,9 @@ theorem query_equiv2 (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
   | find p =>
       simp [eval_jquery, eval_squery, jqueryToSquery]
       -- We use the lemma to show that filtering tuples is same as filtering Users
-      rw [sdbToJdb_filter, h_to_jdb]
+      simp [jpred_to_spred]
+      rw [sdbToJdb_filter sd p]
+      rw [h_to_jdb]
   | delete p =>
       simp [eval_jquery, eval_squery, jqueryToSquery]
       rw [sdbToJdb_filter sd (fun u => !(p u))]
@@ -115,6 +125,7 @@ theorem query_equiv2 (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
 
 theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
     equiv (eval_jquery jd jq) (eval_squery sd (jqueryToSquery jq)) := by
+
   constructor
   · exact query_equiv1 jd sd jq h
   · exact query_equiv2 jd sd jq h
