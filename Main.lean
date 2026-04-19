@@ -1,25 +1,30 @@
-structure User where
+structure Juser where
   name : String
   age  : Nat
 
 def JDB : Type :=
-  List User
+  List Juser
+
+def Suser : Type :=
+  String × Nat
 
 def SDB : Type :=
-  List (String × Nat)
+  List Suser
 
-def jdbToSdb : JDB → SDB
+def jdbToSdb (jd: JDB) : SDB :=
+  match jd with
   | [] => []
-  | u :: us =>
-      (u.name, u.age) :: jdbToSdb us
+  | {name, age} :: xs =>
+      (name, age) :: jdbToSdb xs
 
-def sdbToJdb : SDB → JDB
+def sdbToJdb (sd: SDB) : JDB :=
+  match sd with
   | [] => []
-  | (n, a) :: xs =>
-      { name := n, age := a } :: sdbToJdb xs
+  | (name, age) :: xs =>
+      {name, age} :: sdbToJdb xs
 
-def equiv (j : JDB) (s : SDB) : Prop :=
-  (jdbToSdb j = s) /\ (sdbToJdb s = j)
+def equiv (jd: JDB) (sd: SDB) : Prop :=
+  (jdbToSdb jd = sd) /\ (sdbToJdb sd = jd)
 
 inductive AgeCond where
   | gt : Nat → AgeCond   -- age > n
@@ -32,83 +37,68 @@ inductive SQuery where
 inductive JQuery where
   | find : AgeCond → JQuery
 
-def jqueryToSquery : JQuery → SQuery
+def jqueryToSquery (jq: JQuery) : SQuery :=
+  match jq with
   | JQuery.find cond => SQuery.select cond
 
-def evalAgeCond (u : User) : AgeCond → Bool
-  | AgeCond.gt n => u.age > n
-  | AgeCond.lt n => u.age < n
-  | AgeCond.eq n => u.age = n
+def evalAgeCond (u: Juser) (a: AgeCond) : Bool :=
+  match a with
+  | .gt n => u.age > n
+  | .lt n => u.age < n
+  | .eq n => u.age = n
 
-def eval_squery (db : SDB) : SQuery → SDB
-  | SQuery.select cond =>
-      db.filter (fun r =>
-        evalAgeCond { name := r.1, age := r.2 } cond)
-
-def eval_jquery (db : JDB) : JQuery → JDB
+def eval_jquery (jd : JDB) (jq:JQuery) : JDB :=
+  match jq with
   | JQuery.find cond =>
-      db.filter (fun u => evalAgeCond u cond)
+      jd.filter (fun u => evalAgeCond u cond)
 
-theorem jdbToSdb_filter (db : JDB) (p : User → Bool) :
-    jdbToSdb (db.filter p) =
-    (jdbToSdb db).filter (fun r => p { name := r.1, age := r.2 }) := by
-  induction db with
+def eval_squery (sd : SDB) (sq:SQuery) : SDB :=
+  match sq with
+  | SQuery.select cond =>
+      sd.filter (fun u =>
+        evalAgeCond {name := u.1, age := u.2} cond)
+
+theorem jdbToSdb_filter (jd: JDB) (p: Juser → Bool) :
+    jdbToSdb (jd.filter p) =
+    (jdbToSdb jd).filter (fun r => p {name := r.1, age := r.2}) := by
+  induction jd with
   | nil =>
-      -- Base case: both sides simplify to []
-      simp [List.filter, jdbToSdb]
-  | cons u us ih =>
-      -- Inductive step: check if u satisfies the predicate
+      simp [jdbToSdb]
+  | cons _ _ ih =>
       simp [List.filter, jdbToSdb]
       split
-      .
-        -- Case where p u is true
-        simp [jdbToSdb, ih]
+      . simp [jdbToSdb, ih]
         rename_i h
         simp [h]
-      .
-        -- Case where p u is false
-        rename_i h
+      . rename_i h
         simp [h, ih]
 
-theorem sdbToJdb_filter (db : SDB) (p : User → Bool) :
-    sdbToJdb (db.filter (fun r => p { name := r.1, age := r.2 })) =
-    (sdbToJdb db).filter p := by
-  induction db with
+theorem sdbToJdb_filter (sd: SDB) (p: Juser → Bool) :
+    sdbToJdb (sd.filter (fun r => p {name := r.1, age := r.2})) =
+    (sdbToJdb sd).filter p := by
+  induction sd with
   | nil =>
-      -- Base case: [] = []
-      simp [List.filter, sdbToJdb]
-  | cons r rs ih =>
-      -- r is a pair (String × Nat)
-      -- Destructure the pair to make the fields explicit
-      match r with
+      simp [sdbToJdb]
+  | cons x _ ih =>
+      match x with
       | (n, a) =>
           simp [List.filter, sdbToJdb]
           split
-          · -- Case where p { name := n, age := a } is true
-            rename_i h
-            simp [sdbToJdb, ih]
-          · -- Case where p { name := n, age := a } is false
-            rename_i h
-            simp [ih]
+          · simp [sdbToJdb, ih]
+          grind
 
--- Main theorem
 theorem query_equiv1
-    (jdb : JDB)
-    (sdb : SDB)
+    (jd : JDB)
+    (sd : SDB)
     (jq : JQuery)
-    (h : equiv jdb sdb) :
-    jdbToSdb (eval_jquery jdb jq) = eval_squery sdb (jqueryToSquery jq) := by
-  -- Destructure the equivalence hypothesis
-  obtain ⟨h_to_sdb, _⟩ := h
-  -- Case analysis on the query
+    (h : equiv jd sd) :
+    jdbToSdb (eval_jquery jd jq) = eval_squery sd (jqueryToSquery jq) := by
+  rcases h with ⟨h_to_sdb, _⟩
   cases jq with
   | find cond =>
-    -- Unfold definitions
-    simp only [eval_jquery, eval_squery, jqueryToSquery]
-    -- Apply the distribution lemma
-    rw [jdbToSdb_filter]
-    -- Use the equivalence to substitute sdb for jdbToSdb jdb
-    rw [h_to_sdb]
+      simp only [eval_jquery, eval_squery, jqueryToSquery]
+      rw [jdbToSdb_filter]
+      grind
 
 theorem query_equiv2
     (jdb : JDB)
@@ -116,21 +106,14 @@ theorem query_equiv2
     (jq : JQuery)
     (h : equiv jdb sdb) :
     sdbToJdb (eval_squery sdb (jqueryToSquery jq)) = (eval_jquery jdb jq) := by
-  -- 1. Extract the second part of the equivalence: sdbToJdb sdb = jdb
-  obtain ⟨_, h_to_jdb⟩ := h
-
+  rcases h with ⟨_, h_to_jdb⟩
   cases jq with
   | find cond =>
-    -- 2. Unfold the definitions
     simp only [eval_jquery, eval_squery, jqueryToSquery]
-
-    -- 3. Use simp to apply the lemma (it's smarter than rw for higher-order functions)
     rw [sdbToJdb_filter sdb (fun u => evalAgeCond u cond)]
+    grind
 
-    -- 4. Now the goal is: List.filter (...) (sdbToJdb sdb) = List.filter (...) jdb
-    -- Use the equivalence hypothesis to replace (sdbToJdb sdb) with jdb
-    rw [h_to_jdb]
-
+-- Main theorem
 theorem query_equiv
     (jdb : JDB)
     (sdb : SDB)
