@@ -2,124 +2,85 @@ structure Juser where
   name : String
   age  : Nat
 
-def JDB : Type :=
-  List Juser
-
-def Suser : Type :=
-  String × Nat
-
-def SDB : Type :=
-  List Suser
+def JDB : Type := List Juser
+def Suser : Type := String × Nat
+def SDB : Type := List Suser
 
 def jdbToSdb (jd: JDB) : SDB :=
   match jd with
   | [] => []
-  | {name, age} :: xs =>
-      (name, age) :: jdbToSdb xs
+  | {name, age} :: xs => (name, age) :: jdbToSdb xs
 
 def sdbToJdb (sd: SDB) : JDB :=
   match sd with
   | [] => []
-  | (name, age) :: xs =>
-      {name, age} :: sdbToJdb xs
+  | (name, age) :: xs => {name, age} :: sdbToJdb xs
 
 def equiv (jd: JDB) (sd: SDB) : Prop :=
   (jdbToSdb jd = sd) /\ (sdbToJdb sd = jd)
 
-inductive AgeCond where
-  | gt : Nat → AgeCond   -- age > n
-  | lt : Nat → AgeCond   -- age < n
-  | eq : Nat → AgeCond   -- age = n
+inductive JQuery where
+  | find : (Juser → Bool) → JQuery
 
 inductive SQuery where
-  | select : AgeCond → SQuery
+  | select : (Juser → Bool) → SQuery
 
-inductive JQuery where
-  | find : AgeCond → JQuery
+def jqueryToSquery : JQuery → SQuery
+  | .find p => .select p
 
-def jqueryToSquery (jq: JQuery) : SQuery :=
-  match jq with
-  | JQuery.find cond => SQuery.select cond
+def eval_jquery (jd : JDB) : JQuery → JDB
+  | .find p => jd.filter p
 
-def evalAgeCond (u: Juser) (a: AgeCond) : Bool :=
-  match a with
-  | .gt n => u.age > n
-  | .lt n => u.age < n
-  | .eq n => u.age = n
-
-def eval_jquery (jd : JDB) (jq:JQuery) : JDB :=
-  match jq with
-  | JQuery.find cond =>
-      jd.filter (fun u => evalAgeCond u cond)
-
-def eval_squery (sd : SDB) (sq:SQuery) : SDB :=
-  match sq with
-  | SQuery.select cond =>
-      sd.filter (fun u =>
-        evalAgeCond {name := u.1, age := u.2} cond)
+def eval_squery (sd : SDB) : SQuery → SDB
+  | .select p => sd.filter (fun r => p {name := r.1, age := r.2})
 
 theorem jdbToSdb_filter (jd: JDB) (p: Juser → Bool) :
     jdbToSdb (jd.filter p) =
     (jdbToSdb jd).filter (fun r => p {name := r.1, age := r.2}) := by
   induction jd with
-  | nil =>
-      simp [jdbToSdb]
-  | cons _ _ ih =>
+  | nil => simp [jdbToSdb, List.filter]
+  | cons u us ih =>
       simp [List.filter, jdbToSdb]
       split
-      . simp [jdbToSdb, ih]
-        rename_i h
-        simp [h]
-      . rename_i h
+      · rename_i h
+        simp [jdbToSdb, h, ih]
+      · rename_i h
         simp [h, ih]
 
 theorem sdbToJdb_filter (sd: SDB) (p: Juser → Bool) :
     sdbToJdb (sd.filter (fun r => p {name := r.1, age := r.2})) =
     (sdbToJdb sd).filter p := by
   induction sd with
-  | nil =>
-      simp [sdbToJdb]
-  | cons x _ ih =>
+  | nil => simp [sdbToJdb, List.filter]
+  | cons x xs ih =>
       match x with
       | (n, a) =>
           simp [List.filter, sdbToJdb]
           split
-          · simp [sdbToJdb, ih]
-          grind
+          · rename_i h
+            simp [sdbToJdb, ih]
+          · rename_i h
+            simp [ih]
 
-theorem query_equiv1
-    (jd : JDB)
-    (sd : SDB)
-    (jq : JQuery)
-    (h : equiv jd sd) :
+theorem query_equiv1 (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
     jdbToSdb (eval_jquery jd jq) = eval_squery sd (jqueryToSquery jq) := by
   rcases h with ⟨h_to_sdb, _⟩
   cases jq with
-  | find cond =>
-      simp only [eval_jquery, eval_squery, jqueryToSquery]
-      rw [jdbToSdb_filter]
-      grind
+  | find p =>
+      simp [eval_jquery, eval_squery, jqueryToSquery]
+      rw [jdbToSdb_filter, h_to_sdb]
 
-theorem query_equiv2
-    (jdb : JDB)
-    (sdb : SDB)
-    (jq : JQuery)
-    (h : equiv jdb sdb) :
-    sdbToJdb (eval_squery sdb (jqueryToSquery jq)) = (eval_jquery jdb jq) := by
+theorem query_equiv2 (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
+    sdbToJdb (eval_squery sd (jqueryToSquery jq)) = (eval_jquery jd jq) := by
   rcases h with ⟨_, h_to_jdb⟩
   cases jq with
-  | find cond =>
-    simp only [eval_jquery, eval_squery, jqueryToSquery]
-    rw [sdbToJdb_filter sdb (fun u => evalAgeCond u cond)]
-    grind
+  | find p =>
+    simp [eval_jquery, eval_squery, jqueryToSquery]
+    -- We use the lemma to show that filtering tuples is same as filtering Users
+    rw [sdbToJdb_filter, h_to_jdb]
 
--- Main theorem
-theorem query_equiv
-    (jdb : JDB)
-    (sdb : SDB)
-    (jq : JQuery)
-    (h : equiv jdb sdb) :
-    equiv (eval_jquery jdb jq) (eval_squery sdb (jqueryToSquery jq)) := by
-    constructor
-    . exact query_equiv1 jdb sdb jq h;
-    . exact query_equiv2 jdb sdb jq h
+theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
+    equiv (eval_jquery jd jq) (eval_squery sd (jqueryToSquery jq)) := by
+  constructor
+  · exact query_equiv1 jd sd jq h
+  · exact query_equiv2 jd sd jq h
