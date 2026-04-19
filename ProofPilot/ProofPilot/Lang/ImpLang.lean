@@ -1,0 +1,2 @@
+-- ImpLang kept for reference / future DSL work.
+-- The active verification logic is in QueryEquiv.lean.

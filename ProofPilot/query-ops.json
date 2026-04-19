@@ -1,0 +1,16 @@
+{
+  "operations": [
+    {
+      "type": "find",
+      "sql_equivalent": "SELECT",
+      "description": "Return rows where predicate holds"
+    },
+    {
+      "type": "delete",
+      "sql_equivalent": "DELETE",
+      "description": "Remove rows where predicate holds"
+    }
+  ],
+  "pred_fields": ["age"],
+  "pred_ops": ["lt", "le", "gt", "ge", "eq", "ne"]
+}

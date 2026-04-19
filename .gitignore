@@ -1,0 +1,27 @@
+# ── Training / reference material (not part of the project) ──
+bits-and-branches/
+LeanLangur/
+
+# ── Local notes ───────────────────────────────────────────────
+notes.org
+
+# ── Claude Code internal state ────────────────────────────────
+.claude/
+
+# ── Secrets ───────────────────────────────────────────────────
+**/.env
+!**/.env.example
+
+# ── Lean build artefacts ──────────────────────────────────────
+**/.lake/
+**/lake-manifest.json
+
+# ── Node ──────────────────────────────────────────────────────
+**/node_modules/
+**/package-lock.json
+
+# ── SQLite runtime DB ─────────────────────────────────────────
+**/users.db
+
+# ── macOS ─────────────────────────────────────────────────────
+.DS_Store
