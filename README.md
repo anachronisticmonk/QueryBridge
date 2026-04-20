@@ -1,4 +1,4 @@
-# ProofPilot
+# QueryBridge
 
 A Lean 4 proof-synthesis toolkit built for the Claude Hackathon.
 ProofPilot combines a curated library of formal proofs with a structured
