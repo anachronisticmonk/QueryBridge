@@ -1,17 +1,31 @@
-/.lake
+# Lean / Lake
+.lake/
+lake-manifest.json
 
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
 .venv/
 *.egg-info/
+dist/
+build/
 
-# Editor
+# Secrets
+.env
+backend/.env
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Editor / OS
 .DS_Store
 *.swp
 .idea/
 .vscode/
 
-# Large processed datasets — track with DVC / Git LFS instead
+# Large processed datasets
 data/processed/
 data/raw/*.jsonl
