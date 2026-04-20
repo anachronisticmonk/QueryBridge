@@ -1,0 +1,141 @@
+#+title: Notes
+
+scala cookbook for
+meta programming IO
+meta-programming cookbook
+
+model for multilingual Cedar (from AWS)
+
+
+# Hackathon: Proved Guard-rails in Lean for Multi-agent systems
+
+Multi-agent systems such as those built on OpenClaw have become extremely popular due to their great power in many fields. They however come with many risks. These risks need to be addressed, but without losing the power of these systems. Guardrails with **proofs** are a natural approach to ensuring safety without being excessively defensive. This hackathon is focussed on building such verification systems in the **Lean Prover**.
+
+The hackathon will begin with a one-day workshop in Lean focussed mainly on programming and the basic meta-programming needed for building the system. This will be followed by a day of in-person guided start to the projects followed by 10 days of online interactions to complete the projects.
+
+The possible projects are of two kinds \- those focussed on verification of *behaviour* of agentic systems and those focussed on verification of *outputs*. In the case of the latter a project will focus on a specific domain, to make verification feasible.
+
+We describe below some of the details of the two approaches. The first day of the hackathon will be focussed on some of the background needed for both the approaches, and during the second day and subsequent online interactions participants will be guided as they develop the systems.
+
+The code will all be open-sourced (with acknowledgements to the hackathon sponsor) and should be documented well.
+
+## LeanLang models for Agentic behaviour
+
+LeanLang is a programming language as well as a proof assistant, with both these facets very well integrated. The goal of projects in this track is to build a model of agentic flows and properties needed for safety, and to prove that these properties are satisfied.
+
+As an example, we may want an agent to use an API call to `GPT-5.4` to compose a message and broadcast it on social media. This will need the agentic system to have access to the API key, and the power to broadcast to social media. But we certainly don't want the API key to be part of a public broadcast\!
+
+While such leaks can be prevented by very specific *ad hoc* protocols, as a system gets more complex, it is likely that a system will either leak or show some other undesired behaviour (violating **safety**), or the restrictions imposed to prevent this will hamstring the system and reduce its power and usefulness (violating **liveness**). The goal with a model agentic system in Lean is to precisely capture the properties that we desire from a safe system, precisely model what actions can be taken by the agentic system and which of these do not violate safety, and to be able to prove that systems are safe (if they indeed are). This is both a much greater guarantee of safety and allows optimization for liveness without excessive restrictions.
+
+Some of the examples of dangers an agentic system would like to avoid are the following:
+* Secret leakage & propagation
+* Unsafe file paths and overwrites
+* Injection (shell, SQL, prompt, code)
+* Untrusted data flowing into sensitive operations
+* Unauthorized network communication
+* Resource exhaustion
+* Multi-agent interference
+* Invalid or unsafe outputs
+
+Technically, interactions of agents with the environment \- file access, API calls, etc, are so called *effectful* functions. These are captured by a concept called *Monads* in functional programming. An agentic program is the *Free Monad* on the operations that can be performed. Properties, such as various forms of safety, can be encoded as *constructors* of a so-called *inductive type* in Lean. We can define functions that are safe in this sense, and the participants should prove safety. All these concepts will be introduced in the (workshop part of the) hackathon, and a small model example will be shown.
+
+A successful project will be able to verify correct behaviour and flag risks within a powerful agentic system without being excessively defensive and weakening the system. Thus, the system should encode, and prove the absence of, various kinds of unsafe behaviour of agentic systems. Exporting the model to Python or other runtime will be a bonus.
+
+We aim to build a common system by aggregating the various contributions after the hackathon.
+
+## Domain-specific output verification
+
+The second group of possible projects focuses on verification of the *outputs* of an (agentic) AI system. To make this feasible, the project will restrict to a specific domain, build a Lean library for that and a language to interface with AI, and a system for proving correctness.
+
+As an example, consider *regular expressions*, cryptic expressions such as `/https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi` to recognize strings with properties (in the example being a url). It is common to turn to AI to generate a regex for some property. But if we use the regex, for example, to delete all files with a property it is crucial that it is correct. Thus, we would want to prove that the regex generated satisfies the stated property (which also has to be translated into Lean, say by an LLM). We may want to further generate and translate additional necessary conditions and/or sufficient conditions to check the result.
+
+In the (workshop part of) the hackathon we will discuss how to model systems in Lean, embed domain specific languages, prove basic results, and use proof automation. This will enable working on such projects.
+
+### Implementation
+
+The implementation for a domain will involve building the following components:
+* In Lean:  
+
+  * **Domain Model**: Definitions of types, terms and functions in Lean corresponding to the objects and properties to be represented.
+  * **Domain Theory**: Theorems about the objects representing the domain and the functions to work with them. The proof automation builds on these. 
+  * **DSL/Schema**: A language for the domain where conventional or appropriate, otherwise a JSON schema to communicate with AI systems.
+  * Properties to verify if there are universal requirements for the domain (for instance regulations).
+* In Agentic AI:
+
+  * Generate a solution.
+  * Generate proof challenges to be verified for reliability of the solution.
+  * Translate these to Lean.
+* Note that for specific input in the domain, the proof is intended to be fully automated using tactics that can use theorems in the Lean model.
+
+* In this hackathon, the bridge between AI and Lean will be through schemas/domain-specific languages and not general Autoformalization.
+
+### Suggested domains
+
+Some possible domains for projects are the following.
+* SQL queries
+* Chess puzzles
+* Templating languages like `jinja2` and conversions between them.
+* The theorem proving formats SMTLib2 and TPTP.
+* "Formulaic" puzzles like *knights and knaves*, where we have many puzzles of a similar structure.
+* Tic-tac toe and other games with proofs and agents playing.
+* Regular expressions for given properties; Shell commands, using `grep`, `sed` and other tools for processing text files.
+* Scheduling under constraints
+
+
+law of excluded middle
+
+* TODO we also wanted to show that if we have a Json and we convert it into a format like SQL then the transformation is also proven. the way we show that the transformation is faithful or not is via running queries on different data stores.
+
+* whatever we are displaying should be the result of the jq to SQL function
+* function jq to squery we want the output of this
+
+
+* NO we are not verifying the correctness of the query that is generated by the LLM
+user console
+enters query in natural language
+we get the jq [1]
+
+okay so we have proved that jq === sql query
+
+in the interface we can display the jq [1] and the converted SQL (which we will get somehow from the lean file as templatized maybe)
+
+and this is formally verified
+
+
+notice we are working on a very small set of sql ; for example we are only working with SELECT and DELETE so whatever are those keywords in
+
+once we have a verified SQL equivalent to the JQ then we split the screen <div> and we show that the jq on JSON gives the same result as the SQL query on a SQL DB.
+
+
+
+
+* TODO
+
+* transformation itself is incorrect we will need to generate a counterexample
+
+
+root (QueryBridge)
+  - app
+  - proof_pilot
+  - README
+  - CLAUDE.md
+  -
+
+
+QueryBridge — How It Works
+
+  1. User types a natural language query into the console (e.g. "find all users older than 30").
+  2. An LLM translates it into a jq query (e.g. .[] | select(.age > 30)). We trust the LLM to do this — we are not formally verifying
+   the LLM's output.
+  3. The jq query is mechanically translated into SQL using the mapping defined in Main.lean: find → SELECT, delete → DELETE WHERE
+  NOT. This translation is what is formally verified — the Lean theorem query_equiv proves that for any two databases that hold the
+  same data (one as JSON, one as SQL rows), running the jq query and running the equivalent SQL query will always return the same
+  results.
+  4. The UI shows both queries side by side — the jq expression on the left and the SQL statement on the right — with a badge
+  indicating the equivalence is formally verified.
+  5. The screen splits into two live panels: the left panel runs the jq query against a JSON dataset and shows the results; the right
+   panel runs the SQL query against a relational database and shows the results. Both panels display the same output, making the
+  verified equivalence visible to the user in real time.
+
+  The formal guarantee is narrow and precise: we cover only SELECT (with column projection and row filtering) and DELETE. Within that
+   subset, the equivalence is not a test or approximation — it is a machine-checked mathematical proof.
