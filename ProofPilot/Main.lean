@@ -1,5 +1,5 @@
 import Std
-
+import Init.Data.String.TakeDrop
 -- =====================================================
 -- 1. Base Data Structures
 -- =====================================================
@@ -15,14 +15,14 @@ abbrev JDB := List Juser
 abbrev SDB := List Suser
 
 -- =====================================================
--- 2. Conversion and Projections
+-- 2. Conversion
 -- =====================================================
 
 def toS (u : Juser) : Suser := (u.name, u.age)
-def toJ (s : Suser) : Juser := {name := s.1, age := s.2}
+def toJ (s : Suser) : Juser := { name := s.1, age := s.2 }
 
 -- =====================================================
--- 3. Schema + Result
+-- 3. Schema
 -- =====================================================
 
 inductive Col where
@@ -30,61 +30,103 @@ inductive Col where
   deriving Repr, DecidableEq
 
 -- =====================================================
--- 4. Condition Language (shared core)
+-- 4. Generic Values + Operators
+-- =====================================================
+
+inductive Value where
+  | nat : Nat → Value
+  | str : String → Value
+  deriving Repr, DecidableEq
+
+inductive Op where
+  | eq | gt | lt | ge | le
+  deriving Repr, DecidableEq
+
+-- =====================================================
+-- 5. Generic Condition Language
 -- =====================================================
 
 inductive Cond where
   | always : Cond
-  | ageGt  : Nat → Cond
-  | ageLt  : Nat → Cond
-  | ageEq  : Nat → Cond
-  | ageGe  : Nat → Cond
-  | ageLe  : Nat → Cond
-  | nameEq : String → Cond
+  | cmp    : Col → Op → Value → Cond
   | and    : Cond → Cond → Cond
+  | or     : Cond → Cond → Cond
   deriving Repr, Inhabited
+
+-- =====================================================
+-- 6. Evaluation Helpers
+-- =====================================================
+
+def getVal (c : Col) (u : Juser) : Value :=
+  match c with
+  | Col.name => Value.str u.name
+  | Col.age  => Value.nat u.age
+  | Col.all  => Value.str ""   -- unused fallback
+
+def getValS (c : Col) (s : Suser) : Value :=
+  match c, s with
+  | Col.name, (n, _) => Value.str n
+  | Col.age,  (_, a) => Value.nat a
+  | Col.all, _       => Value.str ""
+
+def evalOp : Op → Value → Value → Bool
+  | Op.eq, v₁, v₂ => v₁ = v₂
+  | Op.gt, Value.nat a, Value.nat b => a > b
+  | Op.lt, Value.nat a, Value.nat b => a < b
+  | Op.ge, Value.nat a, Value.nat b => a ≥ b
+  | Op.le, Value.nat a, Value.nat b => a ≤ b
+  | _, _, _ => false
+
+-- =====================================================
+-- 7. Condition Evaluation
+-- =====================================================
 
 def Cond.eval : Cond → Juser → Bool
   | Cond.always, _ => true
-  | Cond.ageGt n, u  => u.age > n
-  | Cond.ageLt n, u  => u.age < n
-  | Cond.ageEq n, u  => u.age = n
-  | Cond.ageGe n, u  => u.age ≥ n
-  | Cond.ageLe n, u  => u.age ≤ n
-  | Cond.nameEq s, u => u.name = s
-  | Cond.and c₁ c₂, u => c₁.eval u && c₂.eval u
+  | Cond.cmp col op v, u =>
+      evalOp op (getVal col u) v
+  | Cond.and c₁ c₂, u =>
+      c₁.eval u && c₂.eval u
+  | Cond.or c₁ c₂, u =>
+      c₁.eval u || c₂.eval u
 
 def Cond.evalS : Cond → Suser → Bool
-  | c, (n, a) => c.eval { name := n, age := a }
+  | Cond.always, _ => true
+  | Cond.cmp col op v, s =>
+      evalOp op (getValS col s) v
+  | Cond.and c₁ c₂, s =>
+      c₁.evalS s && c₂.evalS s
+  | Cond.or c₁ c₂, s =>
+      c₁.evalS s || c₂.evalS s
 
 -- =====================================================
--- 5. Query Languages
+-- 8. Query Languages
 -- =====================================================
 
 inductive JQuery where
   | find   : Col → Cond → JQuery
-  | delete : Cond → JQuery
+  | drop : Cond → JQuery
   deriving Repr
 
 inductive SQuery where
   | select : Col → Cond → SQuery
-  | drop   : Cond → SQuery
+  | delete   : Cond → SQuery
   deriving Repr
 
 -- =====================================================
--- 6. Database Semantics
+-- 9. Semantics
 -- =====================================================
 
 def eval_jquery : JDB → JQuery → JDB
-  | jd, JQuery.find _ c   => jd.filter c.eval
-  | jd, JQuery.delete c   => jd.filter (fun u => ¬ c.eval u)
+  | jd, JQuery.find _ c => jd.filter c.eval
+  | jd, JQuery.drop c => jd.filter (fun u => ¬ c.eval u)
 
 def eval_squery : SDB → SQuery → SDB
   | sd, SQuery.select _ c => sd.filter (fun s => c.evalS s)
-  | sd, SQuery.drop c     => sd.filter (fun s => ¬ c.evalS s)
+  | sd, SQuery.delete c     => sd.filter (fun s => ¬ c.evalS s)
 
 -- =====================================================
--- 7. Equivalence of DBs
+-- 10. DB Equivalence
 -- =====================================================
 
 def equiv (jd : JDB) (sd : SDB) : Prop :=
@@ -92,134 +134,153 @@ def equiv (jd : JDB) (sd : SDB) : Prop :=
   (∀ s : Suser, s ∈ sd ↔ toJ s ∈ jd)
 
 -- =====================================================
--- 8. Translation
+-- 11. Translation
 -- =====================================================
 
 def jquery_to_squery : JQuery → SQuery
   | JQuery.find c p => SQuery.select c p
-  | JQuery.delete p => SQuery.drop p
+  | JQuery.drop p => SQuery.delete p
 
 -- =====================================================
--- 9. Key Lemma (filter preservation)
+-- 12. Bridge Lemma
 -- =====================================================
+
+theorem getVal_bridge (col : Col) (u : Juser) :
+  getVal col u = getValS col (toS u) := by
+  cases col <;> cases u <;> simp [getVal, getValS, toS]
 
 theorem eval_bridge (c : Cond) (u : Juser) :
   c.eval u = c.evalS (toS u) := by
-  simp [Cond.evalS, toS]
+  induction c generalizing u with
+  | always =>
+      simp [Cond.eval, Cond.evalS]
 
-theorem query_equiv (jd: JDB) (sd: SDB) (jq: JQuery) (h: equiv jd sd) :
+  | cmp col op v =>
+      simp [Cond.eval, Cond.evalS, getVal_bridge]
+
+  | and c₁ c₂ ih₁ ih₂ =>
+      simp [Cond.eval, Cond.evalS, ih₁, ih₂]
+
+  | or c₁ c₂ ih₁ ih₂ =>
+      simp [Cond.eval, Cond.evalS, ih₁, ih₂]
+
+-- =====================================================
+-- 13. Main Correctness Theorem
+-- =====================================================
+
+theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
     equiv (eval_jquery jd jq) (eval_squery sd (jquery_to_squery jq)) := by
-  -- Deconstruct the equivalence hypothesis
-  cases h with | intro h_j_to_s h_s_to_j =>
+  cases jq with
+  | find col cond | drop cond =>
+    -- Expand definitions and use the filter lemma specifically
+    simp [equiv, eval_jquery, eval_squery, jquery_to_squery, List.mem_filter] at *
     constructor
-    · -- Direction 1: u ∈ eval_jquery jd jq ↔ toS u ∈ eval_squery sd (jquery_to_squery jq)
-      intro u
-      cases jq with
-      | find col cond =>
-          simp [eval_jquery, eval_squery, jquery_to_squery, List.mem_filter]
-          rw [h_j_to_s, eval_bridge]
-      | delete cond =>
-          simp [eval_jquery, eval_squery, jquery_to_squery, List.mem_filter]
-          rw [h_j_to_s, eval_bridge]
-    · -- Direction 2: s ∈ eval_squery sd (jquery_to_squery jq) ↔ toJ s ∈ eval_jquery jd jq
-      intro s
-      cases jq with
-      | find col cond =>
-          simp [eval_jquery, eval_squery, jquery_to_squery, List.mem_filter]
-          -- Use eval_bridge but targeting the toJ s conversion
-          let u := toJ s
-          have hb : cond.evalS s = cond.eval (toJ s) := by
-            cases s; simp [Cond.evalS, toJ]
-          rw [h_s_to_j, hb]
-      | delete cond =>
-          simp [eval_jquery, eval_squery, jquery_to_squery, List.mem_filter]
-          have hb : cond.evalS s = cond.eval (toJ s) := by
-            cases s; simp [Cond.evalS, toJ]
-          rw [h_s_to_j, hb]
+    · intro u
+      -- Goal: (u ∈ jd ∧ cond.eval u = true) ↔ (toS u ∈ sd ∧ cond.evalS (toS u) = true)
+      rw [h.1 u]
+      rw [eval_bridge]
+    · intro s
+      -- Goal: (s ∈ sd ∧ cond.evalS s = true) ↔ (toJ s ∈ jd ∧ cond.eval (toJ s) = true)
+      rw [h.2 s]
+      -- We need to show cond.evalS s = cond.eval (toJ s)
+      -- Using eval_bridge (toJ s) gives: cond.eval (toJ s) = cond.evalS (toS (toJ s))
+      rw [eval_bridge]
+      -- Simplify toS (toJ s) to s
+      have h_id : toS (toJ s) = s := by cases s; simp [toS, toJ]
+      rw [h_id]
 
 -- =====================================================
--- 10. String-to-Query Parser (The "jq" Bridge)
+-- 14. Parser (updated for generic Cond)
 -- =====================================================
+
+def parseValue (s : String) : Value :=
+  if s.length >= 2 && s.startsWith "\"" && s.endsWith "\"" then
+    -- Convert the resulting slice into a String
+    let inner : String := ((s.drop 1).dropEnd 1).toString
+    Value.str inner
+  else
+    match s.toNat? with
+    | some n => Value.nat n
+    | none   => Value.str s
+
+def parseOp : String → Op
+  | "==" => Op.eq
+  | ">"  => Op.gt
+  | "<"  => Op.lt
+  | ">=" => Op.ge
+  | "<=" => Op.le
+  | _    => Op.eq -- Default
+
+def parseCol : String → Col
+  | "name" => Col.name
+  | "age"  => Col.age
+  | _      => Col.all
 
 partial def parseCond (s : String) : Cond :=
+  -- Fix: trimAscii returns a Slice, so convert to String immediately
   let s' := s.trimAscii.toString
 
-  -- 1. Handle logical AND (Recursive Case)
-  -- If splitOn returns more than 1 part, the delimiter exists.
+  let parseVal (str : String) : Value :=
+    -- Ensure we are working with a trimmed string for matching
+    let trimmed := str.trimAscii.toString
+    if trimmed.front? = some '"' then
+      -- Fix: Use dropEnd and ensure the final result is a String
+      Value.str ((trimmed.drop 1).dropEnd 1).toString
+    else
+      -- toNat! needs a String; str.trimAscii.toString ensures no spaces break it
+      Value.nat trimmed.toNat!
+
   let andParts := s'.splitOn "&&"
   if andParts.length > 1 then
-    let left := andParts.head!.trimAscii.toString
-    let right := "&&".intercalate andParts.tail! |>.trimAscii.toString
-    Cond.and (parseCond left) (parseCond right)
-
-  -- 2. Handle Comparisons (Base Cases)
-  -- We use splitOn for multi-char tokens to ensure they exist.
-
-  else if (s'.splitOn ">=").length > 1 || (s'.splitOn "≥").length > 1 then
-    let delim := if (s'.splitOn ">=").length > 1 then ">=" else "≥"
-    let val := (s'.splitOn delim |>.getLast!).trimAscii.toString.toNat!
-    Cond.ageGe val
-
-  else if (s'.splitOn "<=").length > 1 || (s'.splitOn "≤").length > 1 then
-    let delim := if (s'.splitOn "<=").length > 1 then "<=" else "≤"
-    let val := (s'.splitOn delim |>.getLast!).trimAscii.toString.toNat!
-    Cond.ageLe val
-
-  else if s'.contains '>' then
-    let val := (s'.splitOn ">" |>.getLast!).trimAscii.toString.toNat!
-    Cond.ageGt val
-
-  else if s'.contains '<' then
-    let val := (s'.splitOn "<" |>.getLast!).trimAscii.toString.toNat!
-    Cond.ageLt val
-
-  else if (s'.splitOn "==").length > 1 then
-    let val := (s'.splitOn "==" |>.getLast!).trimAscii
-    let raw := val.toString
-    let cleanVal :=
-      if raw.startsWith "\"" || raw.startsWith "'" then
-        val.drop 1 |>.dropEnd 1 |>.toString
-      else raw
-    Cond.nameEq cleanVal
-
+    -- Recursively parse the left side and the joined right side
+    Cond.and (parseCond andParts.head!) (parseCond ("&&".intercalate andParts.tail!))
+  else if s'.contains "==" then
+    let parts := s'.splitOn "=="
+    let col := if parts.head!.contains "age" then Col.age else Col.name
+    Cond.cmp col Op.eq (parseVal parts.getLast!)
+  else if s'.contains ">=" then
+    Cond.cmp Col.age Op.ge (parseVal (s'.splitOn ">=" |>.getLast!))
+  else if s'.contains "<=" then
+    Cond.cmp Col.age Op.le (parseVal (s'.splitOn "<=" |>.getLast!))
+  else if s'.contains ">" then
+    Cond.cmp Col.age Op.gt (parseVal (s'.splitOn ">" |>.getLast!))
+  else if s'.contains "<" then
+    Cond.cmp Col.age Op.lt (parseVal (s'.splitOn "<" |>.getLast!))
   else
     Cond.always
 
-/--
-  Converts jq-style pipeline string into JQuery.
-  Logic remains the same, ensuring compatibility with standard String functions.
--/
+-- =====================================================
+-- 15. jq → JQuery
+-- =====================================================
+
 def jqToJQuery (input : String) : JQuery :=
   let parts := input.splitOn "|" |>.map (fun p => p.trimAscii.toString)
   match parts with
   | [".[]"] => JQuery.find Col.all Cond.always
 
   | [".[]", sel] =>
-      let op := sel.trimAscii.toString
-      let inner := op.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
-                     |>.replace ".age" "" |>.replace ".name" ""
-      if op.startsWith "delete(" then
-        JQuery.delete (parseCond inner)
+      let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
+      if sel.startsWith "delete(" then
+        JQuery.drop (parseCond inner)
       else
         JQuery.find Col.all (parseCond inner)
 
   | [".[]", sel, col] =>
-      let op := sel.trimAscii.toString
-      let inner := op.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
-                     |>.replace ".age" "" |>.replace ".name" ""
-      if op.startsWith "delete(" then
-        JQuery.delete (parseCond inner)
+      let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
+      let column :=
+        match col with
+        | ".name" => Col.name
+        | ".age"  => Col.age
+        | _       => Col.all
+      if sel.startsWith "delete(" then
+        JQuery.drop (parseCond inner)
       else
-        let column := match col.trimAscii.toString with
-          | ".name" => Col.name
-          | ".age"  => Col.age
-          | _       => Col.all
         JQuery.find column (parseCond inner)
 
   | _ => JQuery.find Col.all Cond.always
 
 -- =====================================================
--- 7. Testing
+-- 16. Testing
 -- =====================================================
 
 def myDB : JDB := [
