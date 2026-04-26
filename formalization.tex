@@ -1,0 +1,181 @@
+\documentclass{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{mathpazo}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+
+\begin{document}
+
+\section*{Formal Specification: JQ $\to$ SQL Correctness}
+
+This document formalizes a translation from jq-style queries over JSON data into SQL-style queries over relational data, and proves that the translation preserves meaning.
+
+% =====================================================
+
+\subsection*{1. Data Structures and Domains}
+
+This section defines the two representations of the same logical data: a user database stored as JSON records and as SQL tuples.
+
+Let $\mathcal{J}$ be the domain of JSON users, where each $j \in \mathcal{J}$ is a record:
+\[
+j = \{ \text{name} : \text{String}, \ \text{age} : \mathbb{N} \}.
+\]
+
+Let $\mathcal{S}$ be the domain of SQL users, where each $s \in \mathcal{S}$ is a tuple:
+\[
+s = (\text{name}, \text{age}) \in \text{String} \times \mathbb{N}.
+\]
+
+\begin{itemize}
+    \item \textbf{JSON Database ($\mathcal{JD}$):} A finite list of JSON user records.
+    \item \textbf{SQL Database ($\mathcal{SD}$):} A finite list of SQL tuples.
+\end{itemize}
+
+We define conversion functions that preserve structure:
+\[
+\text{toS} : \mathcal{J} \to \mathcal{S}, \quad
+\text{toJ} : \mathcal{S} \to \mathcal{J}
+\] 
+such that:
+\[ \text{toS}(\{\text{name}=n, \text{age}=a\}) = (n, a) \]
+
+These functions convert between equivalent representations of the same data.
+
+% =====================================================
+
+\subsection*{2. Database Equivalence}
+
+This section defines when a JSON database and an SQL database represent the same information.
+
+Two databases $JD \in \mathcal{JD}$ and $SD \in \mathcal{SD}$ are equivalent, written $JD \equiv SD$, if they contain corresponding data under conversion:
+
+\[
+JD \equiv SD \iff
+\left( \forall j \in \mathcal{J},\ j \in JD \leftrightarrow \text{toS}(j) \in SD \right)
+\land
+\left( \forall s \in \mathcal{S},\ s \in SD \leftrightarrow \text{toJ}(s) \in JD \right).
+\]
+
+Intuitively, every JSON record exists in the database if and only if its SQL encoding exists in the SQL database, and vice versa.
+
+% =====================================================
+
+\subsection*{3. Condition Semantics}
+
+This section defines how conditions (e.g. \texttt{age > 20}) are evaluated in both representations.
+
+A condition $C$ is interpreted over both formats:
+
+\begin{itemize}
+    \item $\text{eval}_J(C, j)$: evaluates condition $C$ on JSON record $j$
+    \item $\text{eval}_S(C, s)$: evaluates condition $C$ on SQL tuple $s$
+\end{itemize}
+
+\paragraph{Bridge Lemma}
+This lemma ensures that condition evaluation is consistent across representations.
+
+\begin{equation}
+\forall C,\ \forall j \in \mathcal{J},\quad
+\text{eval}_J(C, j) = \text{eval}_S(C, \text{toS}(j)).
+\end{equation}
+
+This is the key semantic consistency property between JSON and SQL worlds.
+
+% =====================================================
+
+\subsection*{4. Translation Function}
+
+This section defines the mapping from jq queries to SQL queries.
+
+\[
+T : Q_{jq} \to Q_{sql}
+\]
+
+The translation preserves the structure of the query while changing its target representation:
+
+\begin{itemize}
+    \item \texttt{find} $\rightarrow$ \texttt{SELECT}
+    \item \texttt{drop} $\rightarrow$ \texttt{DELETE}
+\end{itemize}
+
+The condition $C$ remains unchanged during translation.
+
+% =====================================================
+
+\subsection*{5. Query Semantics}
+
+This section defines how queries operate as filters over databases.
+
+A query $q$ selects or deletes elements based on a condition $C$.
+
+\begin{itemize}
+\item \textbf{jq semantics:} returns all JSON records satisfying $C$
+\[
+\text{eval}_{jq}(JD, q) =
+\{ j \in JD \mid \text{eval}_J(C, j) = \text{true} \}
+\]
+
+\item \textbf{SQL semantics:} returns all SQL tuples satisfying $C$
+\[
+\text{eval}_{sql}(SD, T(q)) =
+\{ s \in SD \mid \text{eval}_S(C, s) = \text{true} \}
+\]
+\end{itemize}
+
+Both systems behave as filters over their respective databases.
+
+% =====================================================
+
+\subsection*{6. Main Correctness Theorem}
+
+This theorem states that translation preserves meaning across both database systems.
+
+\begin{theorem}
+Let $JD \in \mathcal{JD}$ and $SD \in \mathcal{SD}$ such that $JD \equiv SD$.  
+For any jq query $q$, execution after translation preserves equivalence:
+\[
+\text{eval}_{jq}(JD, q)
+\equiv
+\text{toS}\big(\text{eval}_{sql}(SD, T(q))\big).
+\]
+\end{theorem}
+
+\begin{proof}
+We prove element-wise equivalence.
+
+For any $j$:
+\[
+j \in \text{eval}_{jq}(JD, q)
+\iff
+j \in JD \land \text{eval}_J(C,j)
+\]
+
+Using database equivalence:
+\[
+j \in JD \iff \text{toS}(j) \in SD
+\]
+
+Using the Bridge Lemma:
+\[
+\text{eval}_J(C,j) \iff \text{eval}_S(C,\text{toS}(j))
+\]
+
+Combining both:
+\[
+j \in \text{eval}_{jq}(JD,q)
+\iff
+\text{toS}(j) \in \text{eval}_{sql}(SD,T(q))
+\]
+
+Hence the result follows.
+\end{proof}
+
+% =====================================================
+
+\subsection*{7. Interpretation}
+
+This result guarantees semantic preservation: executing a jq query on JSON data produces results equivalent (after conversion) to executing the translated SQL query on relational data.
+In other words, the translation function $T$ is semantics-preserving.
+
+\end{document}
