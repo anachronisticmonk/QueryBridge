@@ -108,54 +108,121 @@ def Cond.evalS : Cond → Suser → Bool
   | Cond.or c₁ c₂, s => c₁.evalS s || c₂.evalS s
 
 -- =====================================================
--- 6. Query Languages & Semantics
+-- 6. Query Languages, Result Types & Semantics
 -- =====================================================
 
 inductive JQuery where
-  | find   : Col → Cond → JQuery
-  | drop   : Cond → JQuery
-  | prepend : Juser → JQuery        -- NEW: prepend a JSON record
+  | find    : Col → Cond → JQuery
+  | drop    : Cond → JQuery
+  | prepend : Juser → JQuery        -- prepend a JSON record
+  | clear   : JQuery                -- empty the database
+  | count   : JQuery                -- AGGREGATE: number of rows
+  | project : Col → Cond → JQuery   -- SELECT col FROM ... WHERE cond
   deriving Repr
 
 inductive SQuery where
-  | select : Col → Cond → SQuery
-  | delete : Cond → SQuery
-  | insert : Suser → SQuery        -- NEW: prepend a tuple to the columns
+  | select   : Col → Cond → SQuery
+  | delete   : Cond → SQuery
+  | insert   : Suser → SQuery       -- prepend a tuple to the columns
+  | truncate : SQuery               -- empty all columns
+  | count    : SQuery               -- AGGREGATE: COUNT(*) — number of rows
+  | project  : Col → Cond → SQuery  -- SELECT col FROM ... WHERE cond
   deriving Repr
 
-def eval_jquery (jd : JDB) : JQuery → JDB
-  | JQuery.find _ c   => jd.filter c.eval
-  | JQuery.drop c     => jd.filter (fun u => !(c.eval u))
-  | JQuery.prepend u   => u :: jd
+/--
+  A query result is one of:
+  - a database (for transformation queries),
+  - a scalar Nat (for aggregate queries like count),
+  - a list of values (for column projection: SELECT col FROM ...).
+  Both eval functions return these wrappers, so DB-shaped, scalar-shaped,
+  and column-shaped queries can coexist in one query language.
+--/
+inductive JResult where
+  | db   : JDB → JResult
+  | num  : Nat → JResult
+  | vals : List Value → JResult
+  deriving Repr
+
+inductive SResult where
+  | db   : SDB → SResult
+  | num  : Nat → SResult
+  | vals : List Value → SResult
+  deriving Repr
+
+def eval_jquery (jd : JDB) : JQuery → JResult
+  | JQuery.find _ c     => JResult.db (jd.filter c.eval)
+  | JQuery.drop c       => JResult.db (jd.filter (fun u => !(c.eval u)))
+  | JQuery.prepend u    => JResult.db (u :: jd)
+  | JQuery.clear        => JResult.db []
+  | JQuery.count        => JResult.num jd.length
+  | JQuery.project col c => JResult.vals ((jd.filter c.eval).map (getVal col))
 
 /--
   Columnar Semantics:
   - select/delete: zip into rows, filter, then unzip back into columns.
   - insert: prepend the new tuple's components to each column.
+  - truncate: empty both columns.
+  - count: number of rows after the columnar discipline (toRows length).
+    Using sd.toRows.length rather than sd.names.length / sd.ages.length
+    is what makes the aggregate well-defined when the columns differ in
+    length — only matched-up tuples count as a "row".
+  - project: filter rows then extract the column. Goes through toRows
+    so projection respects the columnar discipline (mismatched columns
+    contribute no rows to project from).
 --/
-def eval_squery (sd : SDB) : SQuery → SDB
+def eval_squery (sd : SDB) : SQuery → SResult
   | SQuery.select _ c =>
       let rows := sd.toRows.filter c.evalS
-      { names := rows.map (·.1), ages := rows.map (·.2) }
+      SResult.db { names := rows.map (·.1), ages := rows.map (·.2) }
   | SQuery.delete c   =>
       let rows := sd.toRows.filter (fun s => !(c.evalS s))
-      { names := rows.map (·.1), ages := rows.map (·.2) }
+      SResult.db { names := rows.map (·.1), ages := rows.map (·.2) }
   | SQuery.insert s   =>
-      { names := s.1 :: sd.names, ages := s.2 :: sd.ages }
+      SResult.db { names := s.1 :: sd.names, ages := s.2 :: sd.ages }
+  | SQuery.truncate   =>
+      SResult.db { names := [], ages := [] }
+  | SQuery.count      =>
+      SResult.num sd.toRows.length
+  | SQuery.project col c =>
+      SResult.vals ((sd.toRows.filter c.evalS).map (getValS col))
 
 -- =====================================================
--- 7. Equivalence & Translation
+-- 7. Equivalence Relations & Translation
 -- =====================================================
 
+/-- Set-membership equivalence: every JSON record corresponds to a row. --/
 def equiv (jd : JDB) (sd : SDB) : Prop :=
   let rows := sd.toRows
   (∀ u : Juser, u ∈ jd ↔ toS u ∈ rows) ∧
   (∀ s : Suser, s ∈ rows ↔ toJ s ∈ jd)
 
+/-- Permutation equivalence: tracks element MULTIPLICITY, not just
+    membership. Strictly stronger than `equiv`. Required for any
+    aggregate that isn't set-functional (count, sum, average, …). --/
+def permEquiv (jd : JDB) (sd : SDB) : Prop :=
+  List.Perm (jd.map toS) sd.toRows
+
+/-- Equivalence on query results: dispatch by case.
+    - Two `db` results compare under `equiv`.
+    - Two `num` results compare with `=`.
+    - Two `vals` results compare under `List.Perm` (permutation), since
+      projection through a permuted row list yields a permuted value
+      list — the multiset of column values is what's preserved across
+      representations, not the order.
+    - Mismatched constructors are `False`. --/
+def result_equiv : JResult → SResult → Prop
+  | JResult.db jd,    SResult.db sd    => equiv jd sd
+  | JResult.num n₁,   SResult.num n₂   => n₁ = n₂
+  | JResult.vals v₁,  SResult.vals v₂  => List.Perm v₁ v₂
+  | _, _ => False
+
 def jquery_to_squery : JQuery → SQuery
-  | JQuery.find c p   => SQuery.select c p
-  | JQuery.drop p     => SQuery.delete p
-  | JQuery.prepend u   => SQuery.insert (toS u)
+  | JQuery.find c p     => SQuery.select c p
+  | JQuery.drop p       => SQuery.delete p
+  | JQuery.prepend u    => SQuery.insert (toS u)
+  | JQuery.clear        => SQuery.truncate
+  | JQuery.count        => SQuery.count
+  | JQuery.project c p  => SQuery.project c p
 
 -- =====================================================
 -- 8. Proofs
@@ -188,10 +255,6 @@ theorem eval_bridge_S (c : Cond) (s : Suser) :
     simp only [Cond.eval, Cond.evalS]
     rw [ih₁, ih₂]
 
-/--
-  Bridge Lemma: Database Equivalence
-  Synchronizes the JSON view and the columnar view via 'toRows'.
---/
 @[simp]
 theorem db_equiv_bridge (jd : JDB) (sd : SDB) :
     equiv jd sd ↔ (∀ u, u ∈ jd ↔ toS u ∈ sd.toRows) ∧ (∀ s, s ∈ sd.toRows ↔ toJ s ∈ jd) := by
@@ -208,7 +271,6 @@ theorem zip_map_fst_snd {α β : Type} (xs : List (α × β)) :
       simp only [List.map, List.zip]
       exact congrArg _ ih
 
-/-- Round-trip for filter: rebuild columns from filtered rows recovers the rows. -/
 @[simp]
 theorem toRows_filter_reconstruct (sd : SDB) (p : Suser → Bool) :
     (SDB.mk (sd.toRows.filter p |>.map (·.1)) (sd.toRows.filter p |>.map (·.2))).toRows
@@ -216,27 +278,64 @@ theorem toRows_filter_reconstruct (sd : SDB) (p : Suser → Bool) :
   simp only [SDB.toRows]
   exact zip_map_fst_snd (sd.names.zip sd.ages |>.filter p)
 
-/-- Round-trip for insert: prepending to both columns prepends to the row view. -/
 @[simp]
 theorem toRows_insert (s : Suser) (sd : SDB) :
     (SDB.mk (s.1 :: sd.names) (s.2 :: sd.ages)).toRows = s :: sd.toRows := by
   obtain ⟨n, a⟩ := s
   rfl
 
+/-- Permutation equivalence implies set equivalence. The DB-returning
+    cases of `query_equiv` are inherited from this fact. --/
+theorem permEquiv_implies_equiv {jd : JDB} {sd : SDB} (h : permEquiv jd sd) :
+    equiv jd sd := by
+  unfold permEquiv at h
+  refine ⟨?_, ?_⟩
+  · intro u
+    constructor
+    · intro hu
+      have h1 : toS u ∈ jd.map toS := List.mem_map_of_mem hu
+      exact h.mem_iff.mp h1
+    · intro hu
+      have h1 : toS u ∈ jd.map toS := h.mem_iff.mpr hu
+      obtain ⟨v, hv, hvu⟩ := List.mem_map.mp h1
+      have heq : v = u := by
+        have := congrArg toJ hvu
+        simpa using this
+      exact heq ▸ hv
+  · intro s
+    constructor
+    · intro hs
+      have h1 : s ∈ jd.map toS := h.mem_iff.mpr hs
+      obtain ⟨v, hv, hvs⟩ := List.mem_map.mp h1
+      have : toJ s = v := by
+        have h2 := congrArg toJ hvs
+        simpa using h2.symm
+      exact this ▸ hv
+    · intro hs
+      have h1 : toS (toJ s) ∈ jd.map toS := List.mem_map_of_mem hs
+      have h2 : toS (toJ s) = s := toS_toJ s
+      rw [h2] at h1
+      exact h.mem_iff.mp h1
+
 /--
-  The correctness theorem for the JQ → SQL translation.
-  It proves that the translation preserves the equivalence relation (h),
-  for all three query forms: find, drop, and insert.
+  Unified correctness theorem for the JQ → SQL translation.
+  Under permutation equivalence, executing any query (transformation
+  or aggregate) on jd and the translated query on sd yields equivalent
+  results, where equivalence is dispatched by result kind.
 --/
-theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
-    equiv (eval_jquery jd jq) (eval_squery sd (jquery_to_squery jq)) := by
-  rcases h with ⟨hJ, hS⟩
+theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : permEquiv jd sd) :
+    result_equiv (eval_jquery jd jq) (eval_squery sd (jquery_to_squery jq)) := by
+  -- Existing DB cases need only set equivalence; derive it from permEquiv.
+  have hset : equiv jd sd := permEquiv_implies_equiv h
+  rcases hset with ⟨hJ, hS⟩
   cases jq with
 
   -- =========================
   -- FIND CASE
   -- =========================
   | find col c =>
+    -- Goal reduces to `equiv (jd.filter c.eval) {…}` after unfolding result_equiv.
+    show equiv _ _
     constructor
     · intro u
       constructor
@@ -245,10 +344,10 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
         have hmem_rows : toS u ∈ sd.toRows := (hJ u).1 hmem
         have hcond_rows : c.evalS (toS u) = true := by
           simpa [eval_bridge] using hcond
-        simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct]
+        simp [toRows_filter_reconstruct]
         exact ⟨hmem_rows, hcond_rows⟩
       · intro hu
-        simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct] at hu
+        simp [toRows_filter_reconstruct] at hu
         rcases hu with ⟨hmem, hcond⟩
         have hmem_jd : toJ (toS u) ∈ jd := (hS (toS u)).1 hmem
         have hmem_jd' : u ∈ jd := by simpa using hmem_jd
@@ -258,7 +357,7 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
     · intro s
       constructor
       · intro hs
-        simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct] at hs
+        simp [toRows_filter_reconstruct] at hs
         rcases hs with ⟨hmem, hcond⟩
         have hmem_jd : toJ s ∈ jd := (hS s).1 hmem
         have hcond_j : c.eval (toJ s) = true := by
@@ -269,13 +368,14 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
         have hmem_rows : s ∈ sd.toRows := (hJ (toJ s)).1 hmem
         have hcond_s : c.evalS s = true := by
           simpa [eval_bridge_S] using hcond
-        simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct]
+        simp [toRows_filter_reconstruct]
         exact ⟨hmem_rows, hcond_s⟩
 
   -- =========================
   -- DROP CASE
   -- =========================
   | drop c =>
+    show equiv _ _
     constructor
     · intro u
       constructor
@@ -289,10 +389,10 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
         have hcond_rows : c.evalS (toS u) = false := by
           rw [← eval_bridge]; exact hfalse
         have hbang : (!c.evalS (toS u)) = true := by grind
-        simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct]
+        simp [toRows_filter_reconstruct]
         grind
       · intro hu
-        simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct] at hu
+        simp [toRows_filter_reconstruct] at hu
         rcases hu with ⟨hmem, hcond⟩
         have hmem_jd : toJ (toS u) ∈ jd := (hS (toS u)).1 hmem
         have hmem_jd' : u ∈ jd := by simpa using hmem_jd
@@ -307,7 +407,7 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
     · intro s
       constructor
       · intro hs
-        simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct] at hs
+        simp [toRows_filter_reconstruct] at hs
         rcases hs with ⟨hmem, hcond⟩
         have hmem_jd : toJ s ∈ jd := (hS s).1 hmem
         have hfalseS : c.evalS s = false := by
@@ -328,74 +428,114 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
         have hcond_s : c.evalS s = false := by
           rw [eval_bridge_S]; exact hfalse
         have hbang : (!c.evalS s) = true := by grind
-        simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct]
+        simp [toRows_filter_reconstruct]
         grind
 
   -- =========================
-  -- INSERT CASE (new)
+  -- PREPEND CASE
   -- =========================
   | prepend u =>
-    -- LHS: u :: jd
-    -- RHS: SDB with names = u.name :: sd.names, ages = u.age :: sd.ages
-    -- After toRows_insert, the row view of the RHS is toS u :: sd.toRows.
+    show equiv _ _
     constructor
     · intro v
       constructor
-      · -- v ∈ u :: jd  →  toS v ∈ (eval_squery ...).toRows
-        intro hv
-        simp only [eval_jquery] at hv
-        simp only [jquery_to_squery, eval_squery, toRows_insert]
+      · intro hv
         rcases List.mem_cons.mp hv with rfl | hv'
-        · grind --exact List.mem_cons_self _ _
-        · exact List.mem_cons_of_mem _ ((hJ v).1 hv')
-      · -- toS v ∈ toS u :: sd.toRows  →  v ∈ u :: jd
-        intro hv
-        simp only [jquery_to_squery, eval_squery, toRows_insert] at hv
-        simp only [eval_jquery]
-        rcases List.mem_cons.mp hv with heq | hmem
-        · -- heq : toS v = toS u, so v = u via toJ
-          have : v = u := by
+        · simp [toRows_insert]
+        · simp [toRows_insert]
+          right; exact (hJ v).1 hv'
+      · intro hv
+        simp [toRows_insert] at hv
+        rcases hv with heq | hmem
+        · have : v = u := by
             have h := congrArg toJ heq
             simpa using h
-          rw [this]
-          grind --exact List.mem_cons_self _ _
-        · -- hmem : toS v ∈ sd.toRows, hence v ∈ jd via hS
-          have hv_jd : v ∈ jd := by
+          rw [this]; exact List.mem_cons_self
+        · have hv_jd : v ∈ jd := by
             have := (hS (toS v)).1 hmem
             simpa using this
           exact List.mem_cons_of_mem _ hv_jd
     · intro s
       constructor
-      · -- s ∈ toS u :: sd.toRows  →  toJ s ∈ u :: jd
-        intro hs
-        simp only [jquery_to_squery, eval_squery, toRows_insert] at hs
-        simp only [eval_jquery]
-        rcases List.mem_cons.mp hs with rfl | hmem
-        · -- s = toS u, so toJ s = u
-          rw [toJ_toS]
-          grind
-          --exact List.mem_cons_self _ _
+      · intro hs
+        simp [toRows_insert] at hs
+        rcases hs with rfl | hmem
+        · rw [toJ_toS]; exact List.mem_cons_self
         · exact List.mem_cons_of_mem _ ((hS s).1 hmem)
-      · -- toJ s ∈ u :: jd  →  s ∈ toS u :: sd.toRows
-        intro hs
-        simp only [eval_jquery] at hs
-        simp only [jquery_to_squery, eval_squery, toRows_insert]
+      · intro hs
         rcases List.mem_cons.mp hs with heq | hmem
-        · -- heq : toJ s = u, so s = toS u via toS
-          have : s = toS u := by
+        · have : s = toS u := by
             have h := congrArg toS heq
             simpa using h
-          rw [this]
-          grind
-          --exact List.mem_cons_self _ _
-        · -- hmem : toJ s ∈ jd, hence s ∈ sd.toRows via hJ
-          have hs_rows : s ∈ sd.toRows := by
-            have := (hJ (toJ s)).1 hmem
-            simpa using this
-          exact List.mem_cons_of_mem _ hs_rows
+          simp [toRows_insert]; left; exact this
+        · simp [toRows_insert]
+          right
+          have := (hJ (toJ s)).1 hmem
+          simpa using this
+
+  -- =========================
+  -- CLEAR CASE
+  -- =========================
+  | clear =>
+    show equiv _ _
+    refine ⟨?_, ?_⟩
+    · intro u; simp [SDB.toRows]
+    · intro s; simp [SDB.toRows]
+
+  -- =========================
+  -- COUNT CASE (aggregate)
+  -- =========================
+  | count =>
+    -- Goal reduces to a Nat equality after unfolding result_equiv.
+    show jd.length = sd.toRows.length
+    -- permEquiv gives Perm (jd.map toS) sd.toRows.
+    -- Perm preserves length, and map preserves length, so we chain:
+    --   jd.length = (jd.map toS).length = sd.toRows.length
+    have h1 : (jd.map toS).length = sd.toRows.length := h.length_eq
+    rw [List.length_map] at h1
+    exact h1
+
+  -- =========================
+  -- PROJECT CASE (column projection → List Value)
+  -- =========================
+  | project col c =>
+    -- Goal reduces to:
+    --   List.Perm ((jd.filter c.eval).map (getVal col))
+    --             ((sd.toRows.filter c.evalS).map (getValS col))
+    --
+    -- Strategy:
+    --   Step 1 — Bridge equality: rewrite the JSON-side filter+map so it
+    --     factors through `jd.map toS` and the SQL-side projector. This
+    --     lets us state both sides over the same predicate (c.evalS) and
+    --     the same projector (getValS col).
+    --   Step 2 — Perm transport: permEquiv gives Perm (jd.map toS) sd.toRows,
+    --     and Perm is preserved by `.filter p` and `.map f`.
+    show List.Perm ((jd.filter c.eval).map (getVal col))
+                   ((sd.toRows.filter c.evalS).map (getValS col))
+    -- Step 1: Bridge — proven by induction on jd.
+    have key : ∀ (l : List Juser),
+        (l.filter c.eval).map (getVal col) =
+        ((l.map toS).filter c.evalS).map (getValS col) := by
+      intro l
+      induction l with
+      | nil => rfl
+      | cons head tail ih =>
+        have heq  : c.eval head = c.evalS (toS head)         := eval_bridge c head
+        have hgv  : getVal col head = getValS col (toS head) := getVal_bridge col head
+        simp only [List.map_cons, List.filter_cons]
+        cases hc : c.eval head with
+        | true =>
+          have hc' : c.evalS (toS head) = true := heq ▸ hc
+          simp [hc', List.map_cons, ih]
+        | false =>
+          have hc' : c.evalS (toS head) = false := heq ▸ hc
+          simp [hc', ih]
+    rw [key jd]
+    -- Step 2: Apply permutation transport — filter and map preserve Perm.
+    exact (h.filter c.evalS).map (getValS col)
 
 -- =====================================================
--- 9. Parser Logic (unchanged; insert is constructed directly)
+-- 9. Parser Logic
 -- =====================================================
 
 partial def parseCond (s : String) : Cond :=
@@ -441,6 +581,23 @@ def jqToJQuery (input : String) : JQuery :=
       if sel.startsWith "insert(" then
         let inner := sel.replace "insert(" "" |>.replace ")" ""
         JQuery.prepend (parseUser inner)
+      else if sel == "clear()" || sel == "clear" then
+        JQuery.clear
+      else if sel == "count()" || sel == "count" || sel == "length" then
+        JQuery.count
+      else if sel.startsWith "pick(" then
+        -- pick(<col>, <cond>) — minimal projection syntax
+        -- Examples: pick(name, .age > 30), pick(age, .age == 20)
+        let inner := sel.replace "pick(" "" |>.replace ")" ""
+        let parts := inner.splitOn "," |>.map (fun p => p.trimAscii.toString)
+        match parts with
+        | [colStr, condStr] =>
+            let col :=
+              if colStr == "name" then Col.name
+              else if colStr == "age" then Col.age
+              else Col.all
+            JQuery.project col (parseCond condStr)
+        | _ => JQuery.project Col.all Cond.always
       else
         let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
         if sel.startsWith "delete(" then JQuery.drop (parseCond inner)
@@ -462,29 +619,83 @@ def myDB : JDB := [
 ]
 
 #eval myColDB.toRows
-#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | select(.age > 30)"))
 
--- Tests for the new insert query (via parser)
-#eval jqToJQuery ".[] | prepend(\"Charlie\", 25)"
--- Output: JQuery.prepend { name := "Charlie", age := 25 }
-
-#eval eval_jquery myDB (jqToJQuery ".[] | prepend(\"Charlie\", 25)")
--- Output: [{name := "Charlie", age := 25}, {name := "Alice", age := 35}, {name := "Bob", age := 20}]
-
-#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | prepend(\"Charlie\", 25)"))
--- Output: { names := ["Charlie", "Alice", "Bob"], ages := [25, 35, 20] }
-
-#eval (eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | prepend(\"Charlie\", 25)"))).toRows
--- Output: [("Charlie", 25), ("Alice", 35), ("Bob", 20)]
-
--- Direct construction (also works)
-#eval eval_jquery myDB (JQuery.prepend {name := "Dave", age := 40})
--- Output: [{name := "Dave", age := 40}, {name := "Alice", age := 35}, {name := "Bob", age := 20}]
-
--- Existing tests
-#eval jqToJQuery ".[]"
-#eval jqToJQuery ".[] | select(.age > 30) | .name"
+-- DB-returning queries (results wrapped in JResult.db / SResult.db)
 #eval eval_jquery myDB (jqToJQuery ".[] | select(.age > 30)")
-#eval eval_jquery myDB (jqToJQuery ".[] | delete(.name == \"Alice\")")
-#eval eval_jquery myDB (jqToJQuery ".[] | delete(.age > 10)")
-#eval eval_jquery myDB (jqToJQuery ".[] | delete(.age < 18)")
+-- Output: JResult.db [{ name := "Alice", age := 35 }]
+
+#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | select(.age > 30)"))
+-- Output: SResult.db { names := ["Alice"], ages := [35] }
+
+#eval eval_jquery myDB (jqToJQuery ".[] | clear()")
+-- Output: JResult.db []
+
+#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | clear()"))
+-- Output: SResult.db { names := [], ages := [] }
+
+-- Aggregate queries (results wrapped in JResult.num / SResult.num)
+#eval eval_jquery myDB (jqToJQuery ".[] | count")
+-- Output: JResult.num 2
+
+#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | count"))
+-- Output: SResult.num 2
+
+#eval eval_jquery myDB (jqToJQuery ".[] | length")
+-- Output: JResult.num 2  (jq idiom)
+
+#eval eval_jquery myDB JQuery.count
+-- Output: JResult.num 2
+
+#eval eval_squery myColDB SQuery.count
+-- Output: SResult.num 2
+
+-- Aggregate after a transformation (chain by re-feeding the DB)
+#eval eval_jquery (myDB.filter (Cond.cmp Col.age Op.gt (Value.nat 30)).eval) JQuery.count
+-- Output: JResult.num 1   (only Alice survives the filter)
+
+-- Count after prepending a row
+#eval eval_jquery ({name := "Charlie", age := 25} :: myDB) JQuery.count
+-- Output: JResult.num 3
+
+-- Count after clearing
+#eval eval_jquery ([] : JDB) JQuery.count
+-- Output: JResult.num 0
+
+-- =========================
+-- PROJECT (column selection): SELECT col FROM ... WHERE cond
+-- =========================
+-- These exercise the new JResult.vals constructor: results are lists
+-- of Value (mixed strings/numbers depending on which column is picked).
+
+-- SELECT name FROM users WHERE age > 30
+#eval eval_jquery myDB (jqToJQuery ".[] | pick(name, .age > 30)")
+-- Output: JResult.vals [Value.str "Alice"]
+
+#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | pick(name, .age > 30)"))
+-- Output: SResult.vals [Value.str "Alice"]
+
+-- SELECT age FROM users WHERE age > 10  (every row qualifies)
+#eval eval_jquery myDB (jqToJQuery ".[] | pick(age, .age > 10)")
+-- Output: JResult.vals [Value.nat 35, Value.nat 20]
+
+#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | pick(age, .age > 10)"))
+-- Output: SResult.vals [Value.nat 35, Value.nat 20]
+
+-- SELECT name FROM users   (no filter — Cond.always)
+#eval eval_jquery myDB (JQuery.project Col.name Cond.always)
+-- Output: JResult.vals [Value.str "Alice", Value.str "Bob"]
+
+#eval eval_squery myColDB (jquery_to_squery (JQuery.project Col.name Cond.always))
+-- Output: SResult.vals [Value.str "Alice", Value.str "Bob"]
+
+-- SELECT name FROM users WHERE name == "Bob"
+#eval eval_jquery myDB (jqToJQuery ".[] | pick(name, .name == \"Bob\")")
+-- Output: JResult.vals [Value.str "Bob"]
+
+-- Project on empty DB → empty vals
+#eval eval_jquery ([] : JDB) (JQuery.project Col.name Cond.always)
+-- Output: JResult.vals []
+
+-- Project after a filter that excludes everyone
+#eval eval_jquery myDB (JQuery.project Col.name (Cond.cmp Col.age Op.gt (Value.nat 100)))
+-- Output: JResult.vals []
