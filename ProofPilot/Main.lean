@@ -5,29 +5,36 @@ import Init.Data.String.TakeDrop
 -- 1. Base Data Structures
 -- =====================================================
 
+/-- The category a user falls into. Distinct from `name` (which is a String)
+    and `age` (which is a Nat), so the schema now exercises three different
+    payload types. --/
+inductive Role where
+  | student | employee | retired
+  deriving Repr, DecidableEq, BEq
+
 structure Juser where
-  name  : String
-  age   : Nat
-  email : String
+  name : String
+  age  : Nat
+  role : Role
 deriving Repr, DecidableEq, BEq
 
 /-- A SQL row. Encoded right-nested so that:
       s.1     = name
       s.2.1   = age
-      s.2.2   = email
+      s.2.2   = role
     This matches `toS`/`toJ` below and keeps destructuring uniform. --/
-abbrev Suser : Type := String × Nat × String
+abbrev Suser : Type := String × Nat × Role
 
 abbrev JDB := List Juser
 
 /--
   Columnar SQL Database:
-  Names, ages, and emails are stored in separate parallel lists.
+  Names, ages, and roles are stored in separate parallel lists.
 --/
 structure SDB where
-  names  : List String
-  ages   : List Nat
-  emails : List String
+  names : List String
+  ages  : List Nat
+  roles : List Role
 deriving Repr, DecidableEq, BEq
 
 /-- 3-way zip: aligns three parallel columns into a list of triples.
@@ -38,20 +45,20 @@ def zip3 {α β γ : Type} : List α → List β → List γ → List (α × β 
 
 /-- Helper to view the Columnar DB as a list of relational triples (rows) --/
 def SDB.toRows (sd : SDB) : List Suser :=
-  zip3 sd.names sd.ages sd.emails
+  zip3 sd.names sd.ages sd.roles
 
 -- =====================================================
 -- 2. Conversion
 -- =====================================================
 
-def toS (u : Juser) : Suser := (u.name, u.age, u.email)
-def toJ (s : Suser) : Juser := { name := s.1, age := s.2.1, email := s.2.2 }
+def toS (u : Juser) : Suser := (u.name, u.age, u.role)
+def toJ (s : Suser) : Juser := { name := s.1, age := s.2.1, role := s.2.2 }
 
 theorem toJ_toS (u : Juser) : toJ (toS u) = u := by
   simp [toJ, toS]
 
 theorem toS_toJ (s : Suser) : toS (toJ s) = s := by
-  obtain ⟨n, a, e⟩ := s
+  obtain ⟨n, a, r⟩ := s
   rfl
 
 -- =====================================================
@@ -59,12 +66,13 @@ theorem toS_toJ (s : Suser) : toS (toJ s) = s := by
 -- =====================================================
 
 inductive Col where
-  | name | age | email | all
+  | name | age | role | all
   deriving Repr, DecidableEq
 
 inductive Value where
-  | nat : Nat → Value
-  | str : String → Value
+  | nat  : Nat → Value
+  | str  : String → Value
+  | role : Role → Value
   deriving Repr, DecidableEq
 
 inductive Op where
@@ -88,17 +96,17 @@ inductive Cond where
 
 def getVal (c : Col) (u : Juser) : Value :=
   match c with
-  | Col.name  => Value.str u.name
-  | Col.age   => Value.nat u.age
-  | Col.email => Value.str u.email
-  | Col.all   => Value.str ""
+  | Col.name => Value.str u.name
+  | Col.age  => Value.nat u.age
+  | Col.role => Value.role u.role
+  | Col.all  => Value.str ""
 
 def getValS (c : Col) (s : Suser) : Value :=
   match c, s with
-  | Col.name,  (n, _, _) => Value.str n
-  | Col.age,   (_, a, _) => Value.nat a
-  | Col.email, (_, _, e) => Value.str e
-  | Col.all,   _         => Value.str ""
+  | Col.name, (n, _, _) => Value.str n
+  | Col.age,  (_, a, _) => Value.nat a
+  | Col.role, (_, _, r) => Value.role r
+  | Col.all,  _         => Value.str ""
 
 def evalOp : Op → Value → Value → Bool
   | Op.eq, v₁, v₂ => v₁ = v₂
@@ -131,17 +139,17 @@ def Cond.evalS : Cond → Suser → Bool
 --/
 def applyUpdate (col : Col) (v : Value) (u : Juser) : Juser :=
   match col, v with
-  | Col.name,  Value.str s  => { u with name := s }
-  | Col.age,   Value.nat n  => { u with age := n }
-  | Col.email, Value.str s  => { u with email := s }
-  | _, _                    => u   -- type mismatch or Col.all → no-op
+  | Col.name, Value.str s  => { u with name := s }
+  | Col.age,  Value.nat n  => { u with age := n }
+  | Col.role, Value.role r => { u with role := r }
+  | _, _                   => u   -- type mismatch or Col.all → no-op
 
 /-- Per-row update on an Suser, mirroring `applyUpdate` on the SQL side. --/
 def applyUpdateS (col : Col) (v : Value) (s : Suser) : Suser :=
   match col, v with
-  | Col.name,  Value.str n => (n, s.2.1, s.2.2)
-  | Col.age,   Value.nat a => (s.1, a, s.2.2)
-  | Col.email, Value.str e => (s.1, s.2.1, e)
+  | Col.name, Value.str n  => (n, s.2.1, s.2.2)
+  | Col.age,  Value.nat a  => (s.1, a, s.2.2)
+  | Col.role, Value.role r => (s.1, s.2.1, r)
   | _, _                   => s    -- type mismatch or Col.all → no-op
 
 /-- Per-row update gated by a condition. The natural unit for `modify`. --/
@@ -213,27 +221,27 @@ def eval_jquery (jd : JDB) : JQuery → JResult
 def eval_squery (sd : SDB) : SQuery → SResult
   | SQuery.select _ c =>
       let rows := sd.toRows.filter c.evalS
-      SResult.db { names  := rows.map (·.1)
-                   ages   := rows.map (·.2.1)
-                   emails := rows.map (·.2.2) }
+      SResult.db { names := rows.map (·.1)
+                   ages  := rows.map (·.2.1)
+                   roles := rows.map (·.2.2) }
   | SQuery.delete c   =>
       let rows := sd.toRows.filter (fun s => !(c.evalS s))
-      SResult.db { names  := rows.map (·.1)
-                   ages   := rows.map (·.2.1)
-                   emails := rows.map (·.2.2) }
+      SResult.db { names := rows.map (·.1)
+                   ages  := rows.map (·.2.1)
+                   roles := rows.map (·.2.2) }
   | SQuery.insert s   =>
-      SResult.db { names  := s.1   :: sd.names
-                   ages   := s.2.1 :: sd.ages
-                   emails := s.2.2 :: sd.emails }
+      SResult.db { names := s.1   :: sd.names
+                   ages  := s.2.1 :: sd.ages
+                   roles := s.2.2 :: sd.roles }
   | SQuery.truncate   =>
-      SResult.db { names := [], ages := [], emails := [] }
+      SResult.db { names := [], ages := [], roles := [] }
   | SQuery.count      =>
       SResult.num sd.toRows.length
   | SQuery.update col v c =>
       let rows := sd.toRows.map (applyUpdateIfS col v c)
-      SResult.db { names  := rows.map (·.1)
-                   ages   := rows.map (·.2.1)
-                   emails := rows.map (·.2.2) }
+      SResult.db { names := rows.map (·.1)
+                   ages  := rows.map (·.2.1)
+                   roles := rows.map (·.2.2) }
 
 -- =====================================================
 -- 7. Equivalence Relations & Translation
@@ -288,7 +296,7 @@ theorem eval_bridge_S (c : Cond) (s : Suser) :
   induction c generalizing s with
   | always => rfl
   | cmp col op v =>
-    obtain ⟨n, a, e⟩ := s
+    obtain ⟨n, a, r⟩ := s
     cases col <;> rfl
   | and c₁ c₂ ih₁ ih₂ =>
     simp only [Cond.eval, Cond.evalS]
@@ -318,18 +326,18 @@ theorem toRows_filter_reconstruct (sd : SDB) (p : Suser → Bool) :
             (sd.toRows.filter p |>.map (·.2.2))).toRows
     = sd.toRows.filter p := by
   simp only [SDB.toRows]
-  exact zip3_map_components (zip3 sd.names sd.ages sd.emails |>.filter p)
+  exact zip3_map_components (zip3 sd.names sd.ages sd.roles |>.filter p)
 
 theorem toRows_insert (s : Suser) (sd : SDB) :
-    (SDB.mk (s.1 :: sd.names) (s.2.1 :: sd.ages) (s.2.2 :: sd.emails)).toRows
+    (SDB.mk (s.1 :: sd.names) (s.2.1 :: sd.ages) (s.2.2 :: sd.roles)).toRows
     = s :: sd.toRows := by
-  obtain ⟨n, a, e⟩ := s
+  obtain ⟨n, a, r⟩ := s
   rfl
 
 /-- Per-row update commutes with `toS`. -/
 theorem applyUpdate_bridge (col : Col) (v : Value) (u : Juser) :
     applyUpdateS col v (toS u) = toS (applyUpdate col v u) := by
-  obtain ⟨n, a, e⟩ := u
+  obtain ⟨n, a, r⟩ := u
   cases col <;> cases v <;> simp [applyUpdate, applyUpdateS, toS]
 
 /-- Conditional update commutes with `toS` (uses eval_bridge for the guard). -/
@@ -349,7 +357,7 @@ theorem toRows_map_reconstruct (sd : SDB) (f : Suser → Suser) :
             ((sd.toRows.map f).map (·.2.2))).toRows
     = sd.toRows.map f := by
   simp only [SDB.toRows]
-  exact zip3_map_components (zip3 sd.names sd.ages sd.emails |>.map f)
+  exact zip3_map_components (zip3 sd.names sd.ages sd.roles |>.map f)
 
 /-- Permutation equivalence implies set equivalence. The DB-returning
     cases of `query_equiv` are inherited from this fact. --/
@@ -607,42 +615,68 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : permEquiv jd sd) :
 
 partial def parseCond (s : String) : Cond :=
   let s' := s.trimAscii.toString
-  let parseVal (str : String) : Value :=
-    let trimmed := str.trimAscii.toString
-    if trimmed.front? = some '"' then
-      Value.str ((trimmed.drop 1).dropEnd 1).toString
-    else
-      Value.nat trimmed.toNat!
 
-  -- Detect which column an LHS like `.age` or `.email` refers to.
+  -- Try to parse a string as a Role; returns none if it's not a known tag.
+  let parseRole? (raw : String) : Option Role :=
+    match raw.trimAscii.toString with
+    | "student"  => some Role.student
+    | "employee" => some Role.employee
+    | "retired"  => some Role.retired
+    | _          => none
+
+  -- Detect which column an LHS like `.age` or `.role` refers to.
   let detectCol (lhs : String) : Col :=
-    if lhs.contains "email" then Col.email
+    if lhs.contains "role" then Col.role
     else if lhs.contains "age" then Col.age
     else Col.name
+
+  -- Parse a value, choosing the right Value variant based on context.
+  -- For comparison RHS we know the column from `detectCol`, so role
+  -- strings become Value.role rather than Value.str.
+  let parseValForCol (col : Col) (str : String) : Value :=
+    let trimmed := str.trimAscii.toString
+    let unquoted :=
+      if trimmed.front? = some '"' then
+        ((trimmed.drop 1).dropEnd 1).toString
+      else trimmed
+    match col with
+    | Col.role =>
+        match parseRole? unquoted with
+        | some r => Value.role r
+        | none   => Value.str unquoted
+    | Col.age => Value.nat unquoted.toNat!
+    | _       => Value.str unquoted
 
   let andParts := s'.splitOn "&&"
   if andParts.length > 1 then
     Cond.and (parseCond andParts.head!) (parseCond ("&&".intercalate andParts.tail!))
   else if s'.contains "==" then
     let parts := s'.splitOn "=="
-    Cond.cmp (detectCol parts.head!) Op.eq (parseVal parts.getLast!)
+    let col := detectCol parts.head!
+    Cond.cmp col Op.eq (parseValForCol col parts.getLast!)
   else if s'.contains ">" then
-    Cond.cmp Col.age Op.gt (parseVal (s'.splitOn ">" |>.getLast!))
+    Cond.cmp Col.age Op.gt (parseValForCol Col.age (s'.splitOn ">" |>.getLast!))
   else
     Cond.always
 
-/-- Parse a user record from a string like `"Charlie", 25, "c@example.com"` --/
+/-- Parse a user record from a string like `"Charlie", 25, "student"` --/
 def parseUser (s : String) : Juser :=
   let parts := s.splitOn "," |>.map (fun p => p.trimAscii.toString)
   let stripQuotes (raw : String) : String :=
     let t := raw.trimAscii.toString
     if t.front? = some '"' then ((t.drop 1).dropEnd 1).toString else t
+  let parseRole (raw : String) : Role :=
+    match stripQuotes raw with
+    | "student"  => Role.student
+    | "employee" => Role.employee
+    | "retired"  => Role.retired
+    | _          => Role.student   -- default fallback
   match parts with
-  | [nameStr, ageStr, emailStr] =>
-      { name  := stripQuotes nameStr
-        age   := ageStr.trimAscii.toString.toNat!
-        email := stripQuotes emailStr }
-  | _ => { name := "", age := 0, email := "" }
+  | [nameStr, ageStr, roleStr] =>
+      { name := stripQuotes nameStr
+        age  := ageStr.trimAscii.toString.toNat!
+        role := parseRole roleStr }
+  | _ => { name := "", age := 0, role := Role.student }
 
 def jqToJQuery (input : String) : JQuery :=
   let parts := input.splitOn "|" |>.map (fun p => p.trimAscii.toString)
@@ -659,25 +693,38 @@ def jqToJQuery (input : String) : JQuery :=
         -- update(<col>, <value>, <cond>)  — also accepts modify(...)
         -- Examples:
         --   update(.age, 50, .age > 30)
-        --   modify(.name, "Anon", .age < 18)
+        --   modify(.role, "retired", .age > 60)
         let inner := (sel.replace "update(" "" |>.replace "modify(" "" |>.replace ")" "")
-        let parseVal (str : String) : Value :=
-          let trimmed := str.trimAscii.toString
-          if trimmed.front? = some '"' then
-            Value.str ((trimmed.drop 1).dropEnd 1).toString
-          else
-            Value.nat trimmed.toNat!
         let detectCol (lhs : String) : Col :=
-          if lhs.contains "email" then Col.email
+          if lhs.contains "role" then Col.role
           else if lhs.contains "age" then Col.age
           else Col.name
-        -- Split on the first two top-level commas; the rest is the condition
-        -- (so the condition can itself contain `&&` etc.).
+        let parseRole? (raw : String) : Option Role :=
+          match raw.trimAscii.toString with
+          | "student"  => some Role.student
+          | "employee" => some Role.employee
+          | "retired"  => some Role.retired
+          | _          => none
+        let parseValForCol (col : Col) (str : String) : Value :=
+          let trimmed := str.trimAscii.toString
+          let unquoted :=
+            if trimmed.front? = some '"' then
+              ((trimmed.drop 1).dropEnd 1).toString
+            else trimmed
+          match col with
+          | Col.role =>
+              match parseRole? unquoted with
+              | some r => Value.role r
+              | none   => Value.str unquoted
+          | Col.age => Value.nat unquoted.toNat!
+          | _       => Value.str unquoted
+        -- Split on the first two top-level commas; the rest is the condition.
         let bits := inner.splitOn ","
         match bits with
         | colStr :: valStr :: rest =>
             let condStr := ",".intercalate rest
-            JQuery.modify (detectCol colStr) (parseVal valStr) (parseCond condStr)
+            let col := detectCol colStr
+            JQuery.modify col (parseValForCol col valStr) (parseCond condStr)
         | _ => JQuery.modify Col.all (Value.str "") Cond.always
       else
         let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
@@ -690,50 +737,58 @@ def jqToJQuery (input : String) : JQuery :=
 -- =====================================================
 
 def myColDB : SDB := {
-  names  := ["Alice", "Bob"],
-  ages   := [35, 20],
-  emails := ["alice@example.com", "bob@example.com"]
+  names := ["Alice", "Bob"],
+  ages  := [35, 20],
+  roles := [Role.employee, Role.student]
 }
 
 def myDB : JDB := [
-  { name := "Alice", age := 35, email := "alice@example.com" },
-  { name := "Bob",   age := 20, email := "bob@example.com" }
+  { name := "Alice", age := 35, role := Role.employee },
+  { name := "Bob",   age := 20, role := Role.student }
 ]
 
 #guard myColDB.toRows =
-  [("Alice", 35, "alice@example.com"),
-   ("Bob", 20, "bob@example.com")]
+  [("Alice", 35, Role.employee),
+   ("Bob",   20, Role.student)]
 
 #guard eval_jquery myDB (jqToJQuery ".[] | select(.age > 30)")
-  = JResult.db [{ name := "Alice", age := 35, email := "alice@example.com" }]
+  = JResult.db [{ name := "Alice", age := 35, role := Role.employee }]
 
 #guard eval_squery myColDB
   (jquery_to_squery (jqToJQuery ".[] | select(.age > 30)")) =
   SResult.db {
-    names  := ["Alice"],
-    ages   := [35],
-    emails := ["alice@example.com"]
+    names := ["Alice"],
+    ages  := [35],
+    roles := [Role.employee]
   }
 
+-- Filter on the new Role-typed column. Role literals in the surface
+-- syntax are quoted strings ("student", "employee", "retired") and
+-- the parser routes them to Value.role automatically.
 #guard eval_jquery myDB
-  (jqToJQuery ".[] | select(.email == \"bob@example.com\")") =
-  JResult.db [{ name := "Bob", age := 20, email := "bob@example.com" }]
+  (jqToJQuery ".[] | select(.role == \"student\")") =
+  JResult.db [{ name := "Bob", age := 20, role := Role.student }]
 
 #guard eval_squery myColDB
   (jquery_to_squery
-    (jqToJQuery ".[] | select(.email == \"bob@example.com\")")) =
+    (jqToJQuery ".[] | select(.role == \"student\")")) =
   SResult.db {
-    names  := ["Bob"],
-    ages   := [20],
-    emails := ["bob@example.com"]
+    names := ["Bob"],
+    ages  := [20],
+    roles := [Role.student]
   }
 
-  #guard eval_jquery myDB (jqToJQuery ".[] | clear()") =
+-- Direct construction of a role comparison (no parser).
+#guard eval_jquery myDB
+  (JQuery.find Col.all (Cond.cmp Col.role Op.eq (Value.role Role.employee))) =
+  JResult.db [{ name := "Alice", age := 35, role := Role.employee }]
+
+#guard eval_jquery myDB (jqToJQuery ".[] | clear()") =
   JResult.db []
 
 #guard eval_squery myColDB
   (jquery_to_squery (jqToJQuery ".[] | clear()")) =
-  SResult.db { names := [], ages := [], emails := [] }
+  SResult.db { names := [], ages := [], roles := [] }
 
 #guard eval_jquery myDB (jqToJQuery ".[] | count") =
   JResult.num 2
@@ -748,20 +803,39 @@ def myDB : JDB := [
 #guard eval_squery myColDB SQuery.count =
   SResult.num 2
 
+-- Insert via parser; third field is now a quoted role tag.
 #guard eval_jquery myDB
-  (jqToJQuery ".[] | insert(\"Charlie\", 25, \"charlie@example.com\")") =
+  (jqToJQuery ".[] | insert(\"Charlie\", 25, \"retired\")") =
   JResult.db [
-    { name := "Charlie", age := 25, email := "charlie@example.com" },
-    { name := "Alice",   age := 35, email := "alice@example.com" },
-    { name := "Bob",     age := 20, email := "bob@example.com" }
+    { name := "Charlie", age := 25, role := Role.retired },
+    { name := "Alice",   age := 35, role := Role.employee },
+    { name := "Bob",     age := 20, role := Role.student }
   ]
 
+-- Modify a Nat column.
 #guard eval_jquery myDB
   (JQuery.modify Col.age (Value.nat 50)
     (Cond.cmp Col.age Op.gt (Value.nat 30))) =
   JResult.db [
-    { name := "Alice", age := 50, email := "alice@example.com" },
-    { name := "Bob",   age := 20, email := "bob@example.com" }
+    { name := "Alice", age := 50, role := Role.employee },
+    { name := "Bob",   age := 20, role := Role.student }
+  ]
+
+-- Modify the Role column: promote everyone over 30 to retired.
+#guard eval_jquery myDB
+  (JQuery.modify Col.role (Value.role Role.retired)
+    (Cond.cmp Col.age Op.gt (Value.nat 30))) =
+  JResult.db [
+    { name := "Alice", age := 35, role := Role.retired },
+    { name := "Bob",   age := 20, role := Role.student }
+  ]
+
+-- Modify the Role column via the parser.
+#guard eval_jquery myDB
+  (jqToJQuery ".[] | update(.role, \"retired\", .age > 30)") =
+  JResult.db [
+    { name := "Alice", age := 35, role := Role.retired },
+    { name := "Bob",   age := 20, role := Role.student }
   ]
 
 #guard eval_jquery ([] : JDB) JQuery.count =
