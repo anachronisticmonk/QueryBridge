@@ -21,7 +21,8 @@ _UNSUPPORTED_MSG = (
     "  .[]                                           — select all\n"
     "  .[] | select(.field op value)                — filter rows\n"
     "  .[] | select(.field op value) | .col         — filter + project\n"
-    "  del(.[] | select(.field op value))           — delete rows\n\n"
+    "  del(.[] | select(.field op value))           — delete rows\n"
+    "  length                                        — count rows\n\n"
     "Operators: == != > >= < <="
 )
 
@@ -51,6 +52,17 @@ def translate(jq_expr: str) -> dict:
         display_sql : nicely formatted SQL for the UI
     """
     jq = jq_expr.strip()
+
+    # length — count aggregate
+    if jq == "length":
+        return {
+            "type": "count",
+            "col": None,
+            "pred_jq": None,
+            "pred_sql": None,
+            "sql": "SELECT COUNT(*) AS count FROM users",
+            "display_sql": "SELECT COUNT(*) AS count\nFROM users",
+        }
 
     # del(.[] | select(PRED))
     m = re.match(r'del\(\s*\.\[\]\s*\|\s*select\((.+?)\)\s*\)$', jq)

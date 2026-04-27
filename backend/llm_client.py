@@ -18,6 +18,7 @@ String values must be double-quoted.
 Output the jq expression and nothing else. No explanation."""
 
 _MOCK_RULES: list[tuple[list[str], list[str], str]] = [
+    (["how many", "count", "number of"], [],                                            "length"),
     (["delet", "remov"],  ["young", "< 25", "under 25", "less than 25", "below 25"],   "del(.[] | select(.age < 25))"),
     (["delet", "remov"],  ["old", "> 30", "over 30", "older than 30", "above 30"],     "del(.[] | select(.age > 30))"),
     (["name", "names"],   ["over 30", "> 30", "older than 30", "above 30"],            ".[] | select(.age > 30) | .name"),

@@ -34,6 +34,9 @@ def run_jq(data: list[dict], query: dict) -> list:
     pred_jq = query.get("pred_jq")
     col = query.get("col")
 
+    if query["type"] == "count":
+        return [{"count": len(data)}]
+
     if query["type"] == "delete":
         # Return survivors (rows that do NOT match the predicate)
         return [u for u in data if not _eval_pred(u, pred_jq)]

@@ -8,6 +8,7 @@ import SplitResults from './components/SplitResults'
 export default function App() {
   const [nl, setNl] = useState('')
   const [useMock, setUseMock] = useState(true)
+  const [useError, setUseError] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<QueryResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -19,7 +20,7 @@ export default function App() {
     setError(null)
     setResult(null)
     try {
-      const r = await runQuery(query, useMock)
+      const r = await runQuery(query, useMock, useError)
       setResult(r)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -49,6 +50,8 @@ export default function App() {
             loading={loading}
             useMock={useMock}
             onToggleMock={() => setUseMock(v => !v)}
+            useError={useError}
+            onToggleError={() => setUseError(v => !v)}
           />
         </section>
 

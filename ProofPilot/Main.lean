@@ -654,8 +654,22 @@ partial def parseCond (s : String) : Cond :=
     let parts := s'.splitOn "=="
     let col := detectCol parts.head!
     Cond.cmp col Op.eq (parseValForCol col parts.getLast!)
+  else if s'.contains ">=" then
+    let parts := s'.splitOn ">="
+    let col := detectCol parts.head!
+    Cond.cmp col Op.ge (parseValForCol col parts.getLast!)
+  else if s'.contains "<=" then
+    let parts := s'.splitOn "<="
+    let col := detectCol parts.head!
+    Cond.cmp col Op.le (parseValForCol col parts.getLast!)
   else if s'.contains ">" then
-    Cond.cmp Col.age Op.gt (parseValForCol Col.age (s'.splitOn ">" |>.getLast!))
+    let parts := s'.splitOn ">"
+    let col := detectCol parts.head!
+    Cond.cmp col Op.gt (parseValForCol col parts.getLast!)
+  else if s'.contains "<" then
+    let parts := s'.splitOn "<"
+    let col := detectCol parts.head!
+    Cond.cmp col Op.lt (parseValForCol col parts.getLast!)
   else
     Cond.always
 
@@ -681,6 +695,9 @@ def parseUser (s : String) : Juser :=
 def jqToJQuery (input : String) : JQuery :=
   let parts := input.splitOn "|" |>.map (fun p => p.trimAscii.toString)
   match parts with
+  | ["length"] => JQuery.count
+  | ["count"]  => JQuery.count
+  | [".[]"]    => JQuery.find Col.all Cond.always
   | [".[]", sel] =>
       if sel.startsWith "insert(" then
         let inner := sel.replace "insert(" "" |>.replace ")" ""
@@ -730,6 +747,19 @@ def jqToJQuery (input : String) : JQuery :=
         let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
         if sel.startsWith "delete(" then JQuery.drop (parseCond inner)
         else JQuery.find Col.all (parseCond inner)
+  | [".[]", sel, projection] =>
+      -- .[] | select(<cond>) | .<col>
+      if sel.startsWith "select(" && projection.startsWith "." then
+        let inner := sel.replace "select(" "" |>.replace ")" ""
+        let colName := projection.drop 1
+        let col :=
+          if colName.contains "role" then Col.role
+          else if colName.contains "age" then Col.age
+          else if colName.contains "name" then Col.name
+          else Col.all
+        JQuery.find col (parseCond inner)
+      else
+        JQuery.find Col.all Cond.always
   | _ => JQuery.find Col.all Cond.always
 
 -- =====================================================
