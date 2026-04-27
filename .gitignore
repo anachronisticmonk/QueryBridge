@@ -29,3 +29,11 @@ frontend/.vite/
 # Large processed datasets
 data/processed/
 data/raw/*.jsonl
+
+
+# Latex
+formalization.aux
+formalization.fdb_latexmk
+formalization.fls
+formalization.log
+formalization.synctex.gz
