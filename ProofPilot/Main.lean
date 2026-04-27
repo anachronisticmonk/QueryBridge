@@ -6,41 +6,52 @@ import Init.Data.String.TakeDrop
 -- =====================================================
 
 structure Juser where
-  name : String
-  age  : Nat
-deriving Repr, DecidableEq
+  name  : String
+  age   : Nat
+  email : String
+deriving Repr, DecidableEq, BEq
 
-abbrev Suser : Type := String × Nat
+/-- A SQL row. Encoded right-nested so that:
+      s.1     = name
+      s.2.1   = age
+      s.2.2   = email
+    This matches `toS`/`toJ` below and keeps destructuring uniform. --/
+abbrev Suser : Type := String × Nat × String
 
 abbrev JDB := List Juser
 
 /--
   Columnar SQL Database:
-  Names and Ages are stored in separate parallel lists.
+  Names, ages, and emails are stored in separate parallel lists.
 --/
 structure SDB where
-  names : List String
-  ages  : List Nat
-deriving Repr
+  names  : List String
+  ages   : List Nat
+  emails : List String
+deriving Repr, DecidableEq, BEq
 
-/-- Helper to view the Columnar DB as a list of relational tuples (rows) --/
+/-- 3-way zip: aligns three parallel columns into a list of triples.
+    Length is bounded by the shortest of the three columns. --/
+def zip3 {α β γ : Type} : List α → List β → List γ → List (α × β × γ)
+  | a :: as, b :: bs, c :: cs => (a, b, c) :: zip3 as bs cs
+  | _, _, _ => []
+
+/-- Helper to view the Columnar DB as a list of relational triples (rows) --/
 def SDB.toRows (sd : SDB) : List Suser :=
-  sd.names.zip sd.ages
+  zip3 sd.names sd.ages sd.emails
 
 -- =====================================================
 -- 2. Conversion
 -- =====================================================
 
-def toS (u : Juser) : Suser := (u.name, u.age)
-def toJ (s : Suser) : Juser := { name := s.1, age := s.2 }
+def toS (u : Juser) : Suser := (u.name, u.age, u.email)
+def toJ (s : Suser) : Juser := { name := s.1, age := s.2.1, email := s.2.2 }
 
-@[simp]
 theorem toJ_toS (u : Juser) : toJ (toS u) = u := by
   simp [toJ, toS]
 
-@[simp]
 theorem toS_toJ (s : Suser) : toS (toJ s) = s := by
-  obtain ⟨n, a⟩ := s
+  obtain ⟨n, a, e⟩ := s
   rfl
 
 -- =====================================================
@@ -48,7 +59,7 @@ theorem toS_toJ (s : Suser) : toS (toJ s) = s := by
 -- =====================================================
 
 inductive Col where
-  | name | age | all
+  | name | age | email | all
   deriving Repr, DecidableEq
 
 inductive Value where
@@ -77,15 +88,17 @@ inductive Cond where
 
 def getVal (c : Col) (u : Juser) : Value :=
   match c with
-  | Col.name => Value.str u.name
-  | Col.age  => Value.nat u.age
-  | Col.all  => Value.str ""
+  | Col.name  => Value.str u.name
+  | Col.age   => Value.nat u.age
+  | Col.email => Value.str u.email
+  | Col.all   => Value.str ""
 
 def getValS (c : Col) (s : Suser) : Value :=
   match c, s with
-  | Col.name, (n, _) => Value.str n
-  | Col.age,  (_, a) => Value.nat a
-  | Col.all, _       => Value.str ""
+  | Col.name,  (n, _, _) => Value.str n
+  | Col.age,   (_, a, _) => Value.nat a
+  | Col.email, (_, _, e) => Value.str e
+  | Col.all,   _         => Value.str ""
 
 def evalOp : Op → Value → Value → Bool
   | Op.eq, v₁, v₂ => v₁ = v₂
@@ -107,6 +120,37 @@ def Cond.evalS : Cond → Suser → Bool
   | Cond.and c₁ c₂, s => c₁.evalS s && c₂.evalS s
   | Cond.or c₁ c₂, s => c₁.evalS s || c₂.evalS s
 
+/--
+  Per-row update on a Juser. Replaces the column with the given value;
+  type mismatches (e.g. setting `.name` to a Nat) are silently ignored
+  and the row passes through unchanged.
+
+  This "permissive" semantics keeps the proofs simple — no need for a
+  typing judgment on Value vs Col — and matches how dynamically-typed
+  query languages (jq, MongoDB) actually behave.
+--/
+def applyUpdate (col : Col) (v : Value) (u : Juser) : Juser :=
+  match col, v with
+  | Col.name,  Value.str s  => { u with name := s }
+  | Col.age,   Value.nat n  => { u with age := n }
+  | Col.email, Value.str s  => { u with email := s }
+  | _, _                    => u   -- type mismatch or Col.all → no-op
+
+/-- Per-row update on an Suser, mirroring `applyUpdate` on the SQL side. --/
+def applyUpdateS (col : Col) (v : Value) (s : Suser) : Suser :=
+  match col, v with
+  | Col.name,  Value.str n => (n, s.2.1, s.2.2)
+  | Col.age,   Value.nat a => (s.1, a, s.2.2)
+  | Col.email, Value.str e => (s.1, s.2.1, e)
+  | _, _                   => s    -- type mismatch or Col.all → no-op
+
+/-- Per-row update gated by a condition. The natural unit for `modify`. --/
+def applyUpdateIf (col : Col) (v : Value) (c : Cond) (u : Juser) : Juser :=
+  if c.eval u then applyUpdate col v u else u
+
+def applyUpdateIfS (col : Col) (v : Value) (c : Cond) (s : Suser) : Suser :=
+  if c.evalS s then applyUpdateS col v s else s
+
 -- =====================================================
 -- 6. Query Languages, Result Types & Semantics
 -- =====================================================
@@ -114,77 +158,82 @@ def Cond.evalS : Cond → Suser → Bool
 inductive JQuery where
   | find    : Col → Cond → JQuery
   | drop    : Cond → JQuery
-  | prepend : Juser → JQuery        -- prepend a JSON record
-  | clear   : JQuery                -- empty the database
-  | count   : JQuery                -- AGGREGATE: number of rows
-  | project : Col → Cond → JQuery   -- SELECT col FROM ... WHERE cond
+  | prepend : Juser → JQuery               -- prepend a JSON record
+  | clear   : JQuery                       -- empty the database
+  | count   : JQuery                       -- AGGREGATE: number of rows
+  | modify  : Col → Value → Cond → JQuery  -- jq's `map(if cond then .col = v else . end)`
   deriving Repr
 
 inductive SQuery where
   | select   : Col → Cond → SQuery
   | delete   : Cond → SQuery
-  | insert   : Suser → SQuery       -- prepend a tuple to the columns
-  | truncate : SQuery               -- empty all columns
-  | count    : SQuery               -- AGGREGATE: COUNT(*) — number of rows
-  | project  : Col → Cond → SQuery  -- SELECT col FROM ... WHERE cond
+  | insert   : Suser → SQuery              -- prepend a tuple to the columns
+  | truncate : SQuery                      -- empty all columns
+  | count    : SQuery                      -- AGGREGATE: COUNT(*) — number of rows
+  | update   : Col → Value → Cond → SQuery -- UPDATE … SET col = v WHERE cond
   deriving Repr
 
 /--
-  A query result is one of:
-  - a database (for transformation queries),
-  - a scalar Nat (for aggregate queries like count),
-  - a list of values (for column projection: SELECT col FROM ...).
-  Both eval functions return these wrappers, so DB-shaped, scalar-shaped,
-  and column-shaped queries can coexist in one query language.
+  A query result is either a database (for transformation queries)
+  or a scalar (for aggregate queries). Both eval functions return
+  these wrappers, so DB-shaped queries and scalar-shaped queries
+  can coexist in one query language.
 --/
 inductive JResult where
-  | db   : JDB → JResult
-  | num  : Nat → JResult
-  | vals : List Value → JResult
-  deriving Repr
+  | db  : JDB → JResult
+  | num : Nat → JResult
+deriving Repr, DecidableEq, BEq
 
 inductive SResult where
-  | db   : SDB → SResult
-  | num  : Nat → SResult
-  | vals : List Value → SResult
-  deriving Repr
+  | db  : SDB → SResult
+  | num : Nat → SResult
+deriving Repr, DecidableEq, BEq
 
 def eval_jquery (jd : JDB) : JQuery → JResult
-  | JQuery.find _ c     => JResult.db (jd.filter c.eval)
-  | JQuery.drop c       => JResult.db (jd.filter (fun u => !(c.eval u)))
-  | JQuery.prepend u    => JResult.db (u :: jd)
-  | JQuery.clear        => JResult.db []
-  | JQuery.count        => JResult.num jd.length
-  | JQuery.project col c => JResult.vals ((jd.filter c.eval).map (getVal col))
+  | JQuery.find _ c       => JResult.db (jd.filter c.eval)
+  | JQuery.drop c         => JResult.db (jd.filter (fun u => !(c.eval u)))
+  | JQuery.prepend u      => JResult.db (u :: jd)
+  | JQuery.clear          => JResult.db []
+  | JQuery.count          => JResult.num jd.length
+  | JQuery.modify col v c => JResult.db (jd.map (applyUpdateIf col v c))
 
 /--
   Columnar Semantics:
-  - select/delete: zip into rows, filter, then unzip back into columns.
+  - select/delete: zip into rows, filter, then unzip back into three columns.
   - insert: prepend the new tuple's components to each column.
-  - truncate: empty both columns.
+  - truncate: empty all three columns.
   - count: number of rows after the columnar discipline (toRows length).
-    Using sd.toRows.length rather than sd.names.length / sd.ages.length
-    is what makes the aggregate well-defined when the columns differ in
-    length — only matched-up tuples count as a "row".
-  - project: filter rows then extract the column. Goes through toRows
-    so projection respects the columnar discipline (mismatched columns
-    contribute no rows to project from).
+    Using sd.toRows.length rather than the individual column lengths
+    is what makes the aggregate well-defined when columns differ in
+    length — only matched-up triples count as a "row".
+  - update: zip into rows, map per-row update over them, then unzip.
+    Like select/delete, but uses `map` instead of `filter` so every row
+    is preserved (just possibly modified).
 --/
 def eval_squery (sd : SDB) : SQuery → SResult
   | SQuery.select _ c =>
       let rows := sd.toRows.filter c.evalS
-      SResult.db { names := rows.map (·.1), ages := rows.map (·.2) }
+      SResult.db { names  := rows.map (·.1)
+                   ages   := rows.map (·.2.1)
+                   emails := rows.map (·.2.2) }
   | SQuery.delete c   =>
       let rows := sd.toRows.filter (fun s => !(c.evalS s))
-      SResult.db { names := rows.map (·.1), ages := rows.map (·.2) }
+      SResult.db { names  := rows.map (·.1)
+                   ages   := rows.map (·.2.1)
+                   emails := rows.map (·.2.2) }
   | SQuery.insert s   =>
-      SResult.db { names := s.1 :: sd.names, ages := s.2 :: sd.ages }
+      SResult.db { names  := s.1   :: sd.names
+                   ages   := s.2.1 :: sd.ages
+                   emails := s.2.2 :: sd.emails }
   | SQuery.truncate   =>
-      SResult.db { names := [], ages := [] }
+      SResult.db { names := [], ages := [], emails := [] }
   | SQuery.count      =>
       SResult.num sd.toRows.length
-  | SQuery.project col c =>
-      SResult.vals ((sd.toRows.filter c.evalS).map (getValS col))
+  | SQuery.update col v c =>
+      let rows := sd.toRows.map (applyUpdateIfS col v c)
+      SResult.db { names  := rows.map (·.1)
+                   ages   := rows.map (·.2.1)
+                   emails := rows.map (·.2.2) }
 
 -- =====================================================
 -- 7. Equivalence Relations & Translation
@@ -202,33 +251,26 @@ def equiv (jd : JDB) (sd : SDB) : Prop :=
 def permEquiv (jd : JDB) (sd : SDB) : Prop :=
   List.Perm (jd.map toS) sd.toRows
 
-/-- Equivalence on query results: dispatch by case.
-    - Two `db` results compare under `equiv`.
-    - Two `num` results compare with `=`.
-    - Two `vals` results compare under `List.Perm` (permutation), since
-      projection through a permuted row list yields a permuted value
-      list — the multiset of column values is what's preserved across
-      representations, not the order.
-    - Mismatched constructors are `False`. --/
+/-- Equivalence on query results: dispatch by case. Two `db` results
+    compare under `equiv`; two `num` results compare with `=`;
+    a mismatch (one db, one num) is `False`. --/
 def result_equiv : JResult → SResult → Prop
-  | JResult.db jd,    SResult.db sd    => equiv jd sd
-  | JResult.num n₁,   SResult.num n₂   => n₁ = n₂
-  | JResult.vals v₁,  SResult.vals v₂  => List.Perm v₁ v₂
+  | JResult.db jd,  SResult.db sd  => equiv jd sd
+  | JResult.num n₁, SResult.num n₂ => n₁ = n₂
   | _, _ => False
 
 def jquery_to_squery : JQuery → SQuery
-  | JQuery.find c p     => SQuery.select c p
-  | JQuery.drop p       => SQuery.delete p
-  | JQuery.prepend u    => SQuery.insert (toS u)
-  | JQuery.clear        => SQuery.truncate
-  | JQuery.count        => SQuery.count
-  | JQuery.project c p  => SQuery.project c p
+  | JQuery.find c p       => SQuery.select c p
+  | JQuery.drop p         => SQuery.delete p
+  | JQuery.prepend u      => SQuery.insert (toS u)
+  | JQuery.clear          => SQuery.truncate
+  | JQuery.count          => SQuery.count
+  | JQuery.modify col v c => SQuery.update col v c
 
 -- =====================================================
 -- 8. Proofs
 -- =====================================================
 
-@[simp]
 theorem getVal_bridge (col : Col) (u : Juser) :
   getVal col u = getValS col (toS u) := by
   cases col <;> cases u <;> simp [getVal, getValS, toS]
@@ -246,7 +288,7 @@ theorem eval_bridge_S (c : Cond) (s : Suser) :
   induction c generalizing s with
   | always => rfl
   | cmp col op v =>
-    obtain ⟨n, a⟩ := s
+    obtain ⟨n, a, e⟩ := s
     cases col <;> rfl
   | and c₁ c₂ ih₁ ih₂ =>
     simp only [Cond.eval, Cond.evalS]
@@ -255,34 +297,59 @@ theorem eval_bridge_S (c : Cond) (s : Suser) :
     simp only [Cond.eval, Cond.evalS]
     rw [ih₁, ih₂]
 
-@[simp]
 theorem db_equiv_bridge (jd : JDB) (sd : SDB) :
     equiv jd sd ↔ (∀ u, u ∈ jd ↔ toS u ∈ sd.toRows) ∧ (∀ s, s ∈ sd.toRows ↔ toJ s ∈ jd) := by
   simp [equiv, SDB.toRows]
 
-@[simp]
-theorem zip_map_fst_snd {α β : Type} (xs : List (α × β)) :
-    List.zip (xs.map (·.1)) (xs.map (·.2)) = xs := by
+/-- Round-trip for 3-way zip: rebuilding three columns from a list of
+    triples and zipping them back recovers the original triple list. --/
+theorem zip3_map_components {α β γ : Type} (xs : List (α × β × γ)) :
+    zip3 (xs.map (·.1)) (xs.map (·.2.1)) (xs.map (·.2.2)) = xs := by
   induction xs with
   | nil => rfl
   | cons x xs ih =>
-    cases x with
-    | mk a b =>
-      simp only [List.map, List.zip]
-      exact congrArg _ ih
+    obtain ⟨a, b, c⟩ := x
+    simp only [List.map, zip3]
+    exact congrArg _ ih
 
-@[simp]
 theorem toRows_filter_reconstruct (sd : SDB) (p : Suser → Bool) :
-    (SDB.mk (sd.toRows.filter p |>.map (·.1)) (sd.toRows.filter p |>.map (·.2))).toRows
+    (SDB.mk (sd.toRows.filter p |>.map (·.1))
+            (sd.toRows.filter p |>.map (·.2.1))
+            (sd.toRows.filter p |>.map (·.2.2))).toRows
     = sd.toRows.filter p := by
   simp only [SDB.toRows]
-  exact zip_map_fst_snd (sd.names.zip sd.ages |>.filter p)
+  exact zip3_map_components (zip3 sd.names sd.ages sd.emails |>.filter p)
 
-@[simp]
 theorem toRows_insert (s : Suser) (sd : SDB) :
-    (SDB.mk (s.1 :: sd.names) (s.2 :: sd.ages)).toRows = s :: sd.toRows := by
-  obtain ⟨n, a⟩ := s
+    (SDB.mk (s.1 :: sd.names) (s.2.1 :: sd.ages) (s.2.2 :: sd.emails)).toRows
+    = s :: sd.toRows := by
+  obtain ⟨n, a, e⟩ := s
   rfl
+
+/-- Per-row update commutes with `toS`. -/
+theorem applyUpdate_bridge (col : Col) (v : Value) (u : Juser) :
+    applyUpdateS col v (toS u) = toS (applyUpdate col v u) := by
+  obtain ⟨n, a, e⟩ := u
+  cases col <;> cases v <;> simp [applyUpdate, applyUpdateS, toS]
+
+/-- Conditional update commutes with `toS` (uses eval_bridge for the guard). -/
+theorem applyUpdateIf_bridge (col : Col) (v : Value) (c : Cond) (u : Juser) :
+    applyUpdateIfS col v c (toS u) = toS (applyUpdateIf col v c u) := by
+  unfold applyUpdateIfS applyUpdateIf
+  rw [← eval_bridge c u]
+  cases h : c.eval u with
+  | true  => simp [applyUpdate_bridge]
+  | false => simp
+
+/-- Round-trip for map: rebuild columns from a mapped row list recovers
+    the rows. The `map` analogue of `toRows_filter_reconstruct`. -/
+theorem toRows_map_reconstruct (sd : SDB) (f : Suser → Suser) :
+    (SDB.mk ((sd.toRows.map f).map (·.1))
+            ((sd.toRows.map f).map (·.2.1))
+            ((sd.toRows.map f).map (·.2.2))).toRows
+    = sd.toRows.map f := by
+  simp only [SDB.toRows]
+  exact zip3_map_components (zip3 sd.names sd.ages sd.emails |>.map f)
 
 /-- Permutation equivalence implies set equivalence. The DB-returning
     cases of `query_equiv` are inherited from this fact. --/
@@ -479,8 +546,8 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : permEquiv jd sd) :
   | clear =>
     show equiv _ _
     refine ⟨?_, ?_⟩
-    · intro u; simp [SDB.toRows]
-    · intro s; simp [SDB.toRows]
+    · intro u; simp [SDB.toRows, zip3]
+    · intro s; simp [SDB.toRows, zip3]
 
   -- =========================
   -- COUNT CASE (aggregate)
@@ -496,43 +563,43 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : permEquiv jd sd) :
     exact h1
 
   -- =========================
-  -- PROJECT CASE (column projection → List Value)
+  -- MODIFY CASE (per-row update)
   -- =========================
-  | project col c =>
-    -- Goal reduces to:
-    --   List.Perm ((jd.filter c.eval).map (getVal col))
-    --             ((sd.toRows.filter c.evalS).map (getValS col))
+  | modify col v c =>
+    -- After unfolding result_equiv, the goal is equiv between:
+    --   jd.map (applyUpdateIf col v c)                    (jq side)
+    --   the SDB returned by eval_squery's `update` branch (SQL side)
+    -- The SQL SDB's toRows reduces (via toRows_map_reconstruct) to
+    --   sd.toRows.map (applyUpdateIfS col v c).
     --
     -- Strategy:
-    --   Step 1 — Bridge equality: rewrite the JSON-side filter+map so it
-    --     factors through `jd.map toS` and the SQL-side projector. This
-    --     lets us state both sides over the same predicate (c.evalS) and
-    --     the same projector (getValS col).
-    --   Step 2 — Perm transport: permEquiv gives Perm (jd.map toS) sd.toRows,
-    --     and Perm is preserved by `.filter p` and `.map f`.
-    show List.Perm ((jd.filter c.eval).map (getVal col))
-                   ((sd.toRows.filter c.evalS).map (getValS col))
-    -- Step 1: Bridge — proven by induction on jd.
-    have key : ∀ (l : List Juser),
-        (l.filter c.eval).map (getVal col) =
-        ((l.map toS).filter c.evalS).map (getValS col) := by
-      intro l
-      induction l with
-      | nil => rfl
-      | cons head tail ih =>
-        have heq  : c.eval head = c.evalS (toS head)         := eval_bridge c head
-        have hgv  : getVal col head = getValS col (toS head) := getVal_bridge col head
-        simp only [List.map_cons, List.filter_cons]
-        cases hc : c.eval head with
-        | true =>
-          have hc' : c.evalS (toS head) = true := heq ▸ hc
-          simp [hc', List.map_cons, ih]
-        | false =>
-          have hc' : c.evalS (toS head) = false := heq ▸ hc
-          simp [hc', ih]
-    rw [key jd]
-    -- Step 2: Apply permutation transport — filter and map preserve Perm.
-    exact (h.filter c.evalS).map (getValS col)
+    --   Step 1 — Build a permEquiv between the two updated row lists,
+    --     by chaining: bridge equality (toS commutes with the per-row
+    --     updater) + permutation transport (Perm.map applied to h).
+    --   Step 2 — Lift that permEquiv to equiv via the existing helper
+    --     `permEquiv_implies_equiv`.
+    show equiv _ _
+    -- The result SDB's toRows is exactly sd.toRows.map (applyUpdateIfS …)
+    -- by toRows_map_reconstruct (a simp lemma). Build a permEquiv to it.
+    have hPerm : permEquiv (jd.map (applyUpdateIf col v c))
+                  (SDB.mk
+                    ((sd.toRows.map (applyUpdateIfS col v c)).map (·.1))
+                    ((sd.toRows.map (applyUpdateIfS col v c)).map (·.2.1))
+                    ((sd.toRows.map (applyUpdateIfS col v c)).map (·.2.2))) := by
+      unfold permEquiv
+      -- Goal: Perm ((jd.map (applyUpdateIf …)).map toS) (sdb'.toRows)
+      -- Step 1a: rewrite the left to factor toS through the updater.
+      have hbridge : (jd.map (applyUpdateIf col v c)).map toS
+                   = (jd.map toS).map (applyUpdateIfS col v c) := by
+        rw [List.map_map, List.map_map]
+        congr 1; funext u
+        exact (applyUpdateIf_bridge col v c u).symm
+      -- Step 1b: rewrite the right via toRows_map_reconstruct.
+      rw [hbridge, toRows_map_reconstruct]
+      -- Step 1c: now both sides are `_.map (applyUpdateIfS …)` and we
+      -- have Perm of the underlying lists from h.
+      exact h.map (applyUpdateIfS col v c)
+    exact permEquiv_implies_equiv hPerm
 
 -- =====================================================
 -- 9. Parser Logic
@@ -547,32 +614,35 @@ partial def parseCond (s : String) : Cond :=
     else
       Value.nat trimmed.toNat!
 
+  -- Detect which column an LHS like `.age` or `.email` refers to.
+  let detectCol (lhs : String) : Col :=
+    if lhs.contains "email" then Col.email
+    else if lhs.contains "age" then Col.age
+    else Col.name
+
   let andParts := s'.splitOn "&&"
   if andParts.length > 1 then
     Cond.and (parseCond andParts.head!) (parseCond ("&&".intercalate andParts.tail!))
   else if s'.contains "==" then
     let parts := s'.splitOn "=="
-    let col := if parts.head!.contains "age" then Col.age else Col.name
-    Cond.cmp col Op.eq (parseVal parts.getLast!)
+    Cond.cmp (detectCol parts.head!) Op.eq (parseVal parts.getLast!)
   else if s'.contains ">" then
     Cond.cmp Col.age Op.gt (parseVal (s'.splitOn ">" |>.getLast!))
   else
     Cond.always
 
-/-- Parse a user record from a string like `"Charlie", 25` --/
+/-- Parse a user record from a string like `"Charlie", 25, "c@example.com"` --/
 def parseUser (s : String) : Juser :=
   let parts := s.splitOn "," |>.map (fun p => p.trimAscii.toString)
+  let stripQuotes (raw : String) : String :=
+    let t := raw.trimAscii.toString
+    if t.front? = some '"' then ((t.drop 1).dropEnd 1).toString else t
   match parts with
-  | [nameStr, ageStr] =>
-      let trimmed := nameStr.trimAscii.toString
-      let name :=
-        if trimmed.front? = some '"' then
-          ((trimmed.drop 1).dropEnd 1).toString
-        else
-          trimmed
-      let age := ageStr.trimAscii.toString.toNat!
-      { name := name, age := age }
-  | _ => { name := "", age := 0 }
+  | [nameStr, ageStr, emailStr] =>
+      { name  := stripQuotes nameStr
+        age   := ageStr.trimAscii.toString.toNat!
+        email := stripQuotes emailStr }
+  | _ => { name := "", age := 0, email := "" }
 
 def jqToJQuery (input : String) : JQuery :=
   let parts := input.splitOn "|" |>.map (fun p => p.trimAscii.toString)
@@ -585,19 +655,30 @@ def jqToJQuery (input : String) : JQuery :=
         JQuery.clear
       else if sel == "count()" || sel == "count" || sel == "length" then
         JQuery.count
-      else if sel.startsWith "pick(" then
-        -- pick(<col>, <cond>) — minimal projection syntax
-        -- Examples: pick(name, .age > 30), pick(age, .age == 20)
-        let inner := sel.replace "pick(" "" |>.replace ")" ""
-        let parts := inner.splitOn "," |>.map (fun p => p.trimAscii.toString)
-        match parts with
-        | [colStr, condStr] =>
-            let col :=
-              if colStr == "name" then Col.name
-              else if colStr == "age" then Col.age
-              else Col.all
-            JQuery.project col (parseCond condStr)
-        | _ => JQuery.project Col.all Cond.always
+      else if sel.startsWith "update(" || sel.startsWith "modify(" then
+        -- update(<col>, <value>, <cond>)  — also accepts modify(...)
+        -- Examples:
+        --   update(.age, 50, .age > 30)
+        --   modify(.name, "Anon", .age < 18)
+        let inner := (sel.replace "update(" "" |>.replace "modify(" "" |>.replace ")" "")
+        let parseVal (str : String) : Value :=
+          let trimmed := str.trimAscii.toString
+          if trimmed.front? = some '"' then
+            Value.str ((trimmed.drop 1).dropEnd 1).toString
+          else
+            Value.nat trimmed.toNat!
+        let detectCol (lhs : String) : Col :=
+          if lhs.contains "email" then Col.email
+          else if lhs.contains "age" then Col.age
+          else Col.name
+        -- Split on the first two top-level commas; the rest is the condition
+        -- (so the condition can itself contain `&&` etc.).
+        let bits := inner.splitOn ","
+        match bits with
+        | colStr :: valStr :: rest =>
+            let condStr := ",".intercalate rest
+            JQuery.modify (detectCol colStr) (parseVal valStr) (parseCond condStr)
+        | _ => JQuery.modify Col.all (Value.str "") Cond.always
       else
         let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
         if sel.startsWith "delete(" then JQuery.drop (parseCond inner)
@@ -609,93 +690,83 @@ def jqToJQuery (input : String) : JQuery :=
 -- =====================================================
 
 def myColDB : SDB := {
-  names := ["Alice", "Bob"],
-  ages  := [35, 20]
+  names  := ["Alice", "Bob"],
+  ages   := [35, 20],
+  emails := ["alice@example.com", "bob@example.com"]
 }
 
 def myDB : JDB := [
-  {name := "Alice", age := 35},
-  {name := "Bob", age := 20}
+  { name := "Alice", age := 35, email := "alice@example.com" },
+  { name := "Bob",   age := 20, email := "bob@example.com" }
 ]
 
-#eval myColDB.toRows
+#guard myColDB.toRows =
+  [("Alice", 35, "alice@example.com"),
+   ("Bob", 20, "bob@example.com")]
 
--- DB-returning queries (results wrapped in JResult.db / SResult.db)
-#eval eval_jquery myDB (jqToJQuery ".[] | select(.age > 30)")
--- Output: JResult.db [{ name := "Alice", age := 35 }]
+#guard eval_jquery myDB (jqToJQuery ".[] | select(.age > 30)")
+  = JResult.db [{ name := "Alice", age := 35, email := "alice@example.com" }]
 
-#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | select(.age > 30)"))
--- Output: SResult.db { names := ["Alice"], ages := [35] }
+#guard eval_squery myColDB
+  (jquery_to_squery (jqToJQuery ".[] | select(.age > 30)")) =
+  SResult.db {
+    names  := ["Alice"],
+    ages   := [35],
+    emails := ["alice@example.com"]
+  }
 
-#eval eval_jquery myDB (jqToJQuery ".[] | clear()")
--- Output: JResult.db []
+#guard eval_jquery myDB
+  (jqToJQuery ".[] | select(.email == \"bob@example.com\")") =
+  JResult.db [{ name := "Bob", age := 20, email := "bob@example.com" }]
 
-#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | clear()"))
--- Output: SResult.db { names := [], ages := [] }
+#guard eval_squery myColDB
+  (jquery_to_squery
+    (jqToJQuery ".[] | select(.email == \"bob@example.com\")")) =
+  SResult.db {
+    names  := ["Bob"],
+    ages   := [20],
+    emails := ["bob@example.com"]
+  }
 
--- Aggregate queries (results wrapped in JResult.num / SResult.num)
-#eval eval_jquery myDB (jqToJQuery ".[] | count")
--- Output: JResult.num 2
+  #guard eval_jquery myDB (jqToJQuery ".[] | clear()") =
+  JResult.db []
 
-#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | count"))
--- Output: SResult.num 2
+#guard eval_squery myColDB
+  (jquery_to_squery (jqToJQuery ".[] | clear()")) =
+  SResult.db { names := [], ages := [], emails := [] }
 
-#eval eval_jquery myDB (jqToJQuery ".[] | length")
--- Output: JResult.num 2  (jq idiom)
+#guard eval_jquery myDB (jqToJQuery ".[] | count") =
+  JResult.num 2
 
-#eval eval_jquery myDB JQuery.count
--- Output: JResult.num 2
+#guard eval_squery myColDB
+  (jquery_to_squery (jqToJQuery ".[] | count")) =
+  SResult.num 2
 
-#eval eval_squery myColDB SQuery.count
--- Output: SResult.num 2
+#guard eval_jquery myDB JQuery.count =
+  JResult.num 2
 
--- Aggregate after a transformation (chain by re-feeding the DB)
-#eval eval_jquery (myDB.filter (Cond.cmp Col.age Op.gt (Value.nat 30)).eval) JQuery.count
--- Output: JResult.num 1   (only Alice survives the filter)
+#guard eval_squery myColDB SQuery.count =
+  SResult.num 2
 
--- Count after prepending a row
-#eval eval_jquery ({name := "Charlie", age := 25} :: myDB) JQuery.count
--- Output: JResult.num 3
+#guard eval_jquery myDB
+  (jqToJQuery ".[] | insert(\"Charlie\", 25, \"charlie@example.com\")") =
+  JResult.db [
+    { name := "Charlie", age := 25, email := "charlie@example.com" },
+    { name := "Alice",   age := 35, email := "alice@example.com" },
+    { name := "Bob",     age := 20, email := "bob@example.com" }
+  ]
 
--- Count after clearing
-#eval eval_jquery ([] : JDB) JQuery.count
--- Output: JResult.num 0
+#guard eval_jquery myDB
+  (JQuery.modify Col.age (Value.nat 50)
+    (Cond.cmp Col.age Op.gt (Value.nat 30))) =
+  JResult.db [
+    { name := "Alice", age := 50, email := "alice@example.com" },
+    { name := "Bob",   age := 20, email := "bob@example.com" }
+  ]
 
--- =========================
--- PROJECT (column selection): SELECT col FROM ... WHERE cond
--- =========================
--- These exercise the new JResult.vals constructor: results are lists
--- of Value (mixed strings/numbers depending on which column is picked).
+#guard eval_jquery ([] : JDB) JQuery.count =
+  JResult.num 0
 
--- SELECT name FROM users WHERE age > 30
-#eval eval_jquery myDB (jqToJQuery ".[] | pick(name, .age > 30)")
--- Output: JResult.vals [Value.str "Alice"]
-
-#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | pick(name, .age > 30)"))
--- Output: SResult.vals [Value.str "Alice"]
-
--- SELECT age FROM users WHERE age > 10  (every row qualifies)
-#eval eval_jquery myDB (jqToJQuery ".[] | pick(age, .age > 10)")
--- Output: JResult.vals [Value.nat 35, Value.nat 20]
-
-#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | pick(age, .age > 10)"))
--- Output: SResult.vals [Value.nat 35, Value.nat 20]
-
--- SELECT name FROM users   (no filter — Cond.always)
-#eval eval_jquery myDB (JQuery.project Col.name Cond.always)
--- Output: JResult.vals [Value.str "Alice", Value.str "Bob"]
-
-#eval eval_squery myColDB (jquery_to_squery (JQuery.project Col.name Cond.always))
--- Output: SResult.vals [Value.str "Alice", Value.str "Bob"]
-
--- SELECT name FROM users WHERE name == "Bob"
-#eval eval_jquery myDB (jqToJQuery ".[] | pick(name, .name == \"Bob\")")
--- Output: JResult.vals [Value.str "Bob"]
-
--- Project on empty DB → empty vals
-#eval eval_jquery ([] : JDB) (JQuery.project Col.name Cond.always)
--- Output: JResult.vals []
-
--- Project after a filter that excludes everyone
-#eval eval_jquery myDB (JQuery.project Col.name (Cond.cmp Col.age Op.gt (Value.nat 100)))
--- Output: JResult.vals []
+#guard eval_jquery ([] : JDB)
+  (JQuery.modify Col.age (Value.nat 0) Cond.always) =
+  JResult.db []
