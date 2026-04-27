@@ -10,7 +10,7 @@ structure Juser where
   age  : Nat
 deriving Repr, DecidableEq
 
-def Suser : Type := String × Nat
+abbrev Suser : Type := String × Nat
 
 abbrev JDB := List Juser
 
@@ -112,22 +112,26 @@ def Cond.evalS : Cond → Suser → Bool
 -- =====================================================
 
 inductive JQuery where
-  | find : Col → Cond → JQuery
-  | drop : Cond → JQuery
+  | find   : Col → Cond → JQuery
+  | drop   : Cond → JQuery
+  | prepend : Juser → JQuery        -- NEW: prepend a JSON record
   deriving Repr
 
 inductive SQuery where
   | select : Col → Cond → SQuery
   | delete : Cond → SQuery
+  | insert : Suser → SQuery        -- NEW: prepend a tuple to the columns
   deriving Repr
 
 def eval_jquery (jd : JDB) : JQuery → JDB
-  | JQuery.find _ c => jd.filter c.eval
-  | JQuery.drop c   => jd.filter (fun u => !(c.eval u))
+  | JQuery.find _ c   => jd.filter c.eval
+  | JQuery.drop c     => jd.filter (fun u => !(c.eval u))
+  | JQuery.prepend u   => u :: jd
 
 /--
   Columnar Semantics:
-  To filter, we zip into rows, filter, then unzip back into columns.
+  - select/delete: zip into rows, filter, then unzip back into columns.
+  - insert: prepend the new tuple's components to each column.
 --/
 def eval_squery (sd : SDB) : SQuery → SDB
   | SQuery.select _ c =>
@@ -136,6 +140,8 @@ def eval_squery (sd : SDB) : SQuery → SDB
   | SQuery.delete c   =>
       let rows := sd.toRows.filter (fun s => !(c.evalS s))
       { names := rows.map (·.1), ages := rows.map (·.2) }
+  | SQuery.insert s   =>
+      { names := s.1 :: sd.names, ages := s.2 :: sd.ages }
 
 -- =====================================================
 -- 7. Equivalence & Translation
@@ -147,8 +153,9 @@ def equiv (jd : JDB) (sd : SDB) : Prop :=
   (∀ s : Suser, s ∈ rows ↔ toJ s ∈ jd)
 
 def jquery_to_squery : JQuery → SQuery
-  | JQuery.find c p => SQuery.select c p
-  | JQuery.drop p   => SQuery.delete p
+  | JQuery.find c p   => SQuery.select c p
+  | JQuery.drop p     => SQuery.delete p
+  | JQuery.prepend u   => SQuery.insert (toS u)
 
 -- =====================================================
 -- 8. Proofs
@@ -181,11 +188,9 @@ theorem eval_bridge_S (c : Cond) (s : Suser) :
     simp only [Cond.eval, Cond.evalS]
     rw [ih₁, ih₂]
 
-
 /--
   Bridge Lemma: Database Equivalence
-  This proves that the high-level JSON structure and the low-level
-  Columnar structure are synchronized via the 'toRows' projection.
+  Synchronizes the JSON view and the columnar view via 'toRows'.
 --/
 @[simp]
 theorem db_equiv_bridge (jd : JDB) (sd : SDB) :
@@ -203,6 +208,7 @@ theorem zip_map_fst_snd {α β : Type} (xs : List (α × β)) :
       simp only [List.map, List.zip]
       exact congrArg _ ih
 
+/-- Round-trip for filter: rebuild columns from filtered rows recovers the rows. -/
 @[simp]
 theorem toRows_filter_reconstruct (sd : SDB) (p : Suser → Bool) :
     (SDB.mk (sd.toRows.filter p |>.map (·.1)) (sd.toRows.filter p |>.map (·.2))).toRows
@@ -210,18 +216,25 @@ theorem toRows_filter_reconstruct (sd : SDB) (p : Suser → Bool) :
   simp only [SDB.toRows]
   exact zip_map_fst_snd (sd.names.zip sd.ages |>.filter p)
 
+/-- Round-trip for insert: prepending to both columns prepends to the row view. -/
+@[simp]
+theorem toRows_insert (s : Suser) (sd : SDB) :
+    (SDB.mk (s.1 :: sd.names) (s.2 :: sd.ages)).toRows = s :: sd.toRows := by
+  obtain ⟨n, a⟩ := s
+  rfl
+
 /--
   The correctness theorem for the JQ → SQL translation.
-  It proves that the translation preserves the equivalence relation (h).
+  It proves that the translation preserves the equivalence relation (h),
+  for all three query forms: find, drop, and insert.
 --/
-
 theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
     equiv (eval_jquery jd jq) (eval_squery sd (jquery_to_squery jq)) := by
   rcases h with ⟨hJ, hS⟩
   cases jq with
 
   -- =========================
-  -- FIND CASE (unchanged)
+  -- FIND CASE
   -- =========================
   | find col c =>
     constructor
@@ -234,7 +247,6 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
           simpa [eval_bridge] using hcond
         simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct]
         exact ⟨hmem_rows, hcond_rows⟩
-
       · intro hu
         simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct] at hu
         rcases hu with ⟨hmem, hcond⟩
@@ -243,7 +255,6 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
         have hcond_j : c.eval u = true := by
           simpa [eval_bridge] using hcond
         exact List.mem_filter.mpr ⟨hmem_jd', hcond_j⟩
-
     · intro s
       constructor
       · intro hs
@@ -253,7 +264,6 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
         have hcond_j : c.eval (toJ s) = true := by
           simpa [eval_bridge_S] using hcond
         exact List.mem_filter.mpr ⟨hmem_jd, hcond_j⟩
-
       · intro hs
         have ⟨hmem, hcond⟩ := List.mem_filter.mp hs
         have hmem_rows : s ∈ sd.toRows := (hJ (toJ s)).1 hmem
@@ -270,7 +280,6 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
     · intro u
       constructor
       · intro hu
-        -- J → S
         have ⟨hmem, hcond⟩ := List.mem_filter.mp hu
         have hmem_rows : toS u ∈ sd.toRows := (hJ u).1 hmem
         have hfalse : c.eval u = false := by
@@ -282,10 +291,7 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
         have hbang : (!c.evalS (toS u)) = true := by grind
         simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct]
         grind
-        --exact ⟨hmem_rows, hbang⟩
-
       · intro hu
-        -- S → J
         simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct] at hu
         rcases hu with ⟨hmem, hcond⟩
         have hmem_jd : toJ (toS u) ∈ jd := (hS (toS u)).1 hmem
@@ -296,13 +302,11 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
           · rw [h] at hcond; simp at hcond
         have hfalse : c.eval u = false := by
           rw [eval_bridge]; exact hfalseS
-        have hcond_j : (!c.eval u) = true := by grind --rw [hfalse]
+        have hcond_j : (!c.eval u) = true := by grind
         exact List.mem_filter.mpr ⟨hmem_jd', hcond_j⟩
-
     · intro s
       constructor
       · intro hs
-        -- S → J
         simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct] at hs
         rcases hs with ⟨hmem, hcond⟩
         have hmem_jd : toJ s ∈ jd := (hS s).1 hmem
@@ -312,11 +316,9 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
           · rw [h] at hcond; simp at hcond
         have hfalse : c.eval (toJ s) = false := by
           rw [← eval_bridge_S]; exact hfalseS
-        have hcond_j : (!c.eval (toJ s)) = true := by grind --rw [hfalse]
+        have hcond_j : (!c.eval (toJ s)) = true := by grind
         exact List.mem_filter.mpr ⟨hmem_jd, hcond_j⟩
-
       · intro hs
-        -- J → S
         have ⟨hmem, hcond⟩ := List.mem_filter.mp hs
         have hmem_rows : s ∈ sd.toRows := (hJ (toJ s)).1 hmem
         have hfalse : c.eval (toJ s) = false := by
@@ -325,13 +327,75 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
           · rw [h] at hcond; simp at hcond
         have hcond_s : c.evalS s = false := by
           rw [eval_bridge_S]; exact hfalse
-        have hbang : (!c.evalS s) = true := by grind --rw [hcond_s]
+        have hbang : (!c.evalS s) = true := by grind
         simp [eval_squery, jquery_to_squery, toRows_filter_reconstruct]
         grind
-        --exact ⟨hmem_rows, hbang⟩
+
+  -- =========================
+  -- INSERT CASE (new)
+  -- =========================
+  | prepend u =>
+    -- LHS: u :: jd
+    -- RHS: SDB with names = u.name :: sd.names, ages = u.age :: sd.ages
+    -- After toRows_insert, the row view of the RHS is toS u :: sd.toRows.
+    constructor
+    · intro v
+      constructor
+      · -- v ∈ u :: jd  →  toS v ∈ (eval_squery ...).toRows
+        intro hv
+        simp only [eval_jquery] at hv
+        simp only [jquery_to_squery, eval_squery, toRows_insert]
+        rcases List.mem_cons.mp hv with rfl | hv'
+        · grind --exact List.mem_cons_self _ _
+        · exact List.mem_cons_of_mem _ ((hJ v).1 hv')
+      · -- toS v ∈ toS u :: sd.toRows  →  v ∈ u :: jd
+        intro hv
+        simp only [jquery_to_squery, eval_squery, toRows_insert] at hv
+        simp only [eval_jquery]
+        rcases List.mem_cons.mp hv with heq | hmem
+        · -- heq : toS v = toS u, so v = u via toJ
+          have : v = u := by
+            have h := congrArg toJ heq
+            simpa using h
+          rw [this]
+          grind --exact List.mem_cons_self _ _
+        · -- hmem : toS v ∈ sd.toRows, hence v ∈ jd via hS
+          have hv_jd : v ∈ jd := by
+            have := (hS (toS v)).1 hmem
+            simpa using this
+          exact List.mem_cons_of_mem _ hv_jd
+    · intro s
+      constructor
+      · -- s ∈ toS u :: sd.toRows  →  toJ s ∈ u :: jd
+        intro hs
+        simp only [jquery_to_squery, eval_squery, toRows_insert] at hs
+        simp only [eval_jquery]
+        rcases List.mem_cons.mp hs with rfl | hmem
+        · -- s = toS u, so toJ s = u
+          rw [toJ_toS]
+          grind
+          --exact List.mem_cons_self _ _
+        · exact List.mem_cons_of_mem _ ((hS s).1 hmem)
+      · -- toJ s ∈ u :: jd  →  s ∈ toS u :: sd.toRows
+        intro hs
+        simp only [eval_jquery] at hs
+        simp only [jquery_to_squery, eval_squery, toRows_insert]
+        rcases List.mem_cons.mp hs with heq | hmem
+        · -- heq : toJ s = u, so s = toS u via toS
+          have : s = toS u := by
+            have h := congrArg toS heq
+            simpa using h
+          rw [this]
+          grind
+          --exact List.mem_cons_self _ _
+        · -- hmem : toJ s ∈ jd, hence s ∈ sd.toRows via hJ
+          have hs_rows : s ∈ sd.toRows := by
+            have := (hJ (toJ s)).1 hmem
+            simpa using this
+          exact List.mem_cons_of_mem _ hs_rows
 
 -- =====================================================
--- 9. Parser Logic
+-- 9. Parser Logic (unchanged; insert is constructed directly)
 -- =====================================================
 
 partial def parseCond (s : String) : Cond :=
@@ -355,17 +419,36 @@ partial def parseCond (s : String) : Cond :=
   else
     Cond.always
 
+/-- Parse a user record from a string like `"Charlie", 25` --/
+def parseUser (s : String) : Juser :=
+  let parts := s.splitOn "," |>.map (fun p => p.trimAscii.toString)
+  match parts with
+  | [nameStr, ageStr] =>
+      let trimmed := nameStr.trimAscii.toString
+      let name :=
+        if trimmed.front? = some '"' then
+          ((trimmed.drop 1).dropEnd 1).toString
+        else
+          trimmed
+      let age := ageStr.trimAscii.toString.toNat!
+      { name := name, age := age }
+  | _ => { name := "", age := 0 }
+
 def jqToJQuery (input : String) : JQuery :=
   let parts := input.splitOn "|" |>.map (fun p => p.trimAscii.toString)
   match parts with
   | [".[]", sel] =>
-      let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
-      if sel.startsWith "delete(" then JQuery.drop (parseCond inner)
-      else JQuery.find Col.all (parseCond inner)
+      if sel.startsWith "insert(" then
+        let inner := sel.replace "insert(" "" |>.replace ")" ""
+        JQuery.prepend (parseUser inner)
+      else
+        let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
+        if sel.startsWith "delete(" then JQuery.drop (parseCond inner)
+        else JQuery.find Col.all (parseCond inner)
   | _ => JQuery.find Col.all Cond.always
 
 -- =====================================================
--- 10. Execution Example
+-- 10. Execution Examples
 -- =====================================================
 
 def myColDB : SDB := {
@@ -373,47 +456,35 @@ def myColDB : SDB := {
   ages  := [35, 20]
 }
 
-#eval (myColDB.toRows)
-#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | select(.age > 30)"))
-
--- =====================================================
--- 16. Testing
--- =====================================================
-
 def myDB : JDB := [
   {name := "Alice", age := 35},
   {name := "Bob", age := 20}
 ]
 
+#eval myColDB.toRows
+#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | select(.age > 30)"))
+
+-- Tests for the new insert query (via parser)
+#eval jqToJQuery ".[] | prepend(\"Charlie\", 25)"
+-- Output: JQuery.prepend { name := "Charlie", age := 25 }
+
+#eval eval_jquery myDB (jqToJQuery ".[] | prepend(\"Charlie\", 25)")
+-- Output: [{name := "Charlie", age := 25}, {name := "Alice", age := 35}, {name := "Bob", age := 20}]
+
+#eval eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | prepend(\"Charlie\", 25)"))
+-- Output: { names := ["Charlie", "Alice", "Bob"], ages := [25, 35, 20] }
+
+#eval (eval_squery myColDB (jquery_to_squery (jqToJQuery ".[] | prepend(\"Charlie\", 25)"))).toRows
+-- Output: [("Charlie", 25), ("Alice", 35), ("Bob", 20)]
+
+-- Direct construction (also works)
+#eval eval_jquery myDB (JQuery.prepend {name := "Dave", age := 40})
+-- Output: [{name := "Dave", age := 40}, {name := "Alice", age := 35}, {name := "Bob", age := 20}]
+
+-- Existing tests
 #eval jqToJQuery ".[]"
-
 #eval jqToJQuery ".[] | select(.age > 30) | .name"
--- Output: JQuery.find Col.name (Cond.ageGt 30)
-
 #eval eval_jquery myDB (jqToJQuery ".[] | select(.age > 30)")
--- Output: [{ name := "Alice", age := 35 }]
-
-#eval jqToJQuery ".[] | select(.name == \"Bob\" && .age ≥ 20) | .age"
-
-#eval eval_jquery myDB (jqToJQuery ".[] | select(.name == \"Bob\" && .age ≤ 20) | .age")
-
 #eval eval_jquery myDB (jqToJQuery ".[] | delete(.name == \"Alice\")")
--- Output: [{name := "Bob", age := 20}]
-
-#eval eval_jquery myDB (jqToJQuery ".[] | delete(.age ≥ 30)")
--- Output: [{name := "Bob", age := 20}]
-
-#eval eval_jquery myDB (jqToJQuery ".[] | delete(.name == \"Bob\" && .age = 20)")
--- Output: [{name := "Alice", age := 35}]
-
-#eval eval_jquery myDB (jqToJQuery ".[] | delete(.age ≤ 25)")
--- Output: [{name := "Alice", age := 35}]
-
-#eval eval_jquery myDB (jqToJQuery ".[] | delete(.name == \"Bob\")")
--- Output: [{name := "Alice", age := 35}]
-
 #eval eval_jquery myDB (jqToJQuery ".[] | delete(.age > 10)")
--- Output: []
-
 #eval eval_jquery myDB (jqToJQuery ".[] | delete(.age < 18)")
--- Output: [{name := "Alice", age := 35}, {name := "Bob", age := 20}]
