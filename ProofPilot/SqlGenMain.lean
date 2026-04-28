@@ -14,6 +14,7 @@
 -- should always be true under the supported subset.
 
 import Main
+import JqGenMain
 import Lean.Data.Json
 
 open Lean

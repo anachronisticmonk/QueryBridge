@@ -12,10 +12,16 @@ require plausible from git
 
 @[default_target]
 lean_lib «ProofPilot» where
-  roots := #[`Main, `Error, `Test]
+  roots := #[`Main, `Error, `Test, `SqlGenMain, `SqlGenError, `JqGenMain]
 
 lean_exe sqlGenMain where
   root := `SqlGenMain
 
 lean_exe sqlGenError where
   root := `SqlGenError
+
+lean_exe jqGenMain where
+  root := `JqGenMain
+
+lean_exe test where
+  root := `Test
