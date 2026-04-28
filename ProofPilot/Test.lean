@@ -119,7 +119,7 @@ instance : Arbitrary JQuery where
     | 1 => return JQuery.drop (← Arbitrary.arbitrary)
     | 2 => return JQuery.prepend (← Arbitrary.arbitrary)
     | 3 => return JQuery.clear
-    | 4 => return JQuery.count
+    | 4 => return JQuery.length
     | _ =>
       return JQuery.modify
         (← Arbitrary.arbitrary)
@@ -178,10 +178,10 @@ def prop_jdbToSdb_roundtrip (jd : JDB) : Bool :=
     row preserves row-count. -/
 def prop_modify_preserves_count
     (jd : JDB) (col : Col) (v : Value) (c : Cond) : Bool :=
-  match eval_jquery jd JQuery.count,
+  match eval_jquery jd JQuery.length,
         eval_jquery (match eval_jquery jd (JQuery.modify col v c) with
                      | JResult.db jd' => jd'
-                     | _              => []) JQuery.count with
+                     | _              => []) JQuery.length with
   | JResult.num n₁, JResult.num n₂ => n₁ = n₂
   | _, _ => false
 

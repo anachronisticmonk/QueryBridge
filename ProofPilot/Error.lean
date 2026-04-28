@@ -168,7 +168,7 @@ inductive JQuery where
   | drop    : Cond → JQuery
   | prepend : Juser → JQuery               -- prepend a JSON record
   | clear   : JQuery                       -- empty the database
-  | count   : JQuery                       -- AGGREGATE: number of rows
+  | length   : JQuery                       -- AGGREGATE: number of rows
   | modify  : Col → Value → Cond → JQuery  -- jq's `map(if cond then .col = v else . end)`
   deriving Repr
 
@@ -202,7 +202,7 @@ def eval_jquery (jd : JDB) : JQuery → JResult
   | JQuery.drop c         => JResult.db (jd.filter (fun u => !(c.eval u)))
   | JQuery.prepend u      => JResult.db (u :: jd)
   | JQuery.clear          => JResult.db []
-  | JQuery.count          => JResult.num 1 --jd.length            -- ERROR
+  | JQuery.length          => JResult.num 1 --jd.length            -- ERROR
   | JQuery.modify col v c => JResult.db (jd.map (applyUpdateIf col v c))
 
 /--
@@ -272,7 +272,7 @@ def jquery_to_squery : JQuery → SQuery
   | JQuery.drop p         => SQuery.delete p
   | JQuery.prepend u      => SQuery.insert (toS u)
   | JQuery.clear          => SQuery.truncate
-  | JQuery.count          => SQuery.count
+  | JQuery.length          => SQuery.count
   | JQuery.modify col v c => SQuery.update col v c
 
 -- =====================================================
@@ -478,8 +478,7 @@ def parseUser (s : String) : Juser :=
 def jqToJQuery (input : String) : JQuery :=
   let parts := input.splitOn "|" |>.map (fun p => p.trimAscii.toString)
   match parts with
-  | ["length"] => JQuery.count
-  | ["count"]  => JQuery.count
+  | ["length"] => JQuery.length
   | [".[]"]    => JQuery.find Col.all Cond.always
   | [".[]", sel] =>
       if sel.startsWith "insert(" then
@@ -488,7 +487,7 @@ def jqToJQuery (input : String) : JQuery :=
       else if sel == "clear()" || sel == "clear" then
         JQuery.clear
       else if sel == "count()" || sel == "count" || sel == "length" then
-        JQuery.count
+        JQuery.length
       else if sel.startsWith "update(" || sel.startsWith "modify(" then
         -- update(<col>, <value>, <cond>)  — also accepts modify(...)
         -- Examples:
