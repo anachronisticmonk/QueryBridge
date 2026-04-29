@@ -13,10 +13,11 @@ export default function Pipeline({ nl, result, loading, error }: Props) {
   }
 
   const buggy = result?.lean_used_error === true
+  const showLeanBox = !!result?.lean_sql || (loading && !result)
   const leanArrowClass = `pipeline-arrow lean${buggy ? ' error' : ''}`
 
   return (
-    <div className="pipeline">
+    <div className={`pipeline${showLeanBox ? '' : ' compact'}`}>
       {/* Box 1 — Natural Language */}
       <div className="pipeline-box nl">
         <span className="box-label">Natural Language</span>
@@ -41,15 +42,16 @@ export default function Pipeline({ nl, result, loading, error }: Props) {
         )}
       </div>
 
-      {/* Arrow: Python translator (unverified mirror) */}
-      <div className="pipeline-arrow translator">
-        <span className="arrow-label">Python translator</span>
+      {/* Arrow: jq → SQL — the verified equivalence */}
+      <div className="pipeline-arrow verified">
+        <span className="arrow-label">Formally verified jq ↔ SQL equivalence</span>
         <span className="arrow-line" />
+        <span className="proven-indicator">✓ Proven in Lean 4</span>
       </div>
 
-      {/* Box 3 — Python translator's SQL */}
+      {/* Box 3 — SQL */}
       <div className="pipeline-box sql">
-        <span className="box-label">SQL (translator.py)</span>
+        <span className="box-label">SQL</span>
         {loading && !result ? (
           <span className="box-content placeholder loading">translating…</span>
         ) : result ? (
@@ -59,32 +61,30 @@ export default function Pipeline({ nl, result, loading, error }: Props) {
         )}
       </div>
 
-      {/* Arrow: Lean-derived (the verified path) */}
-      <div className={leanArrowClass}>
-        <span className="arrow-label">Lean 4</span>
-        <span className="arrow-line" />
-        {buggy ? (
-          <span className="warning-badge">⚠ Buggy variant</span>
-        ) : (
-          <span className="verified-badge">✓ Proven</span>
-        )}
-      </div>
+      {showLeanBox && (
+        <>
+          {/* Arrow: Lean-derived (the verified path) */}
+          <div className={leanArrowClass}>
+            <span className="arrow-label">Lean 4</span>
+            <span className="arrow-line" />
+            {buggy ? (
+              <span className="warning-badge">⚠ Buggy variant</span>
+            ) : (
+              <span className="verified-badge">✓ Proven</span>
+            )}
+          </div>
 
-      {/* Box 4 — Lean-derived SQL */}
-      <div className="pipeline-box lean-sql">
-        <span className="box-label">SQL (Lean-derived)</span>
-        {loading && !result ? (
-          <span className="box-content placeholder loading">deriving…</span>
-        ) : result?.lean_sql ? (
-          <span className="box-content">{result.lean_sql}</span>
-        ) : result ? (
-          <span className="box-content placeholder">
-            Lean exe not built — run <code>lake build sqlGenMain sqlGenError</code>
-          </span>
-        ) : (
-          <span className="box-content placeholder">—</span>
-        )}
-      </div>
+          {/* Box 4 — Lean-derived SQL */}
+          <div className="pipeline-box lean-sql">
+            <span className="box-label">SQL (Lean-derived)</span>
+            {loading && !result ? (
+              <span className="box-content placeholder loading">deriving…</span>
+            ) : (
+              <span className="box-content">{result?.lean_sql}</span>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }

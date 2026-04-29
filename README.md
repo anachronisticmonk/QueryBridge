@@ -18,26 +18,39 @@ To achieve this, we:
 
 If the JSON and SQL databases start out equivalent, then running a jq query on the JSON database and its translated SQL query on the SQL database will produce **equivalent results**.
 
-## Origin
+## How the proof reaches the running app
 
-This project was built during the **LeanLang for Verified
-Autonomy Hackathon** (April 17–18 + online through May 1,
-2026) at the **Indian Institute of Science (IISc),
-Bangalore**.
-Sponsored by **[Emergence AI](https://www.emergence.ai)**
-Organized by **[Emergence India Labs]
-(https://east.emergence.ai)** in collaboration with
-**IISc Bangalore**.
+The Lean proof isn't a side document — the backend actually executes it. A small Lean binary (`sqlGenMain`) parses the jq string into the verified `JQuery` AST, applies the proven `jquery_to_squery` to get an `SQuery` value, and templatizes that value into an executable SQL string. The result shows up in the UI as **"SQL (Lean-derived)"** alongside the unverified `translator.py` output. Both queries run on identical seed data; the proof rules out any case where the two result panels could disagree.
+
+### Counter-example demo
+
+`ProofPilot/Error.lean` is a near-duplicate of `Main.lean` with one deliberate bug: `eval_jquery JQuery.count` returns `1` instead of the actual length. Toggle **"Use buggy variant (Error.lean)"** in the UI and ask *"how many users"* — the buggy jq evaluator returns `count:1` while the correct SQL evaluator returns `count:7`. The divergence renders as a red counter-example panel: the precise input the equivalence proof refuses to type-check against.
 
 ## Supported Queries
 
-- `SELECT *`  
-- `SELECT column`  
-- `DELETE WHERE`  
+- `SELECT *` — `.[]`
+- `SELECT * WHERE …` — `.[] | select(.field op value)`
+- `SELECT col FROM … WHERE …` — `.[] | select(.field op value) | .col`
+- `DELETE WHERE …` — `del(.[] | select(.field op value))`
+- `SELECT COUNT(*)` — `length`
+- `INSERT INTO … VALUES …` — `.[] | insert("name", age, "role")`
+- `UPDATE … SET col = v WHERE …` — `.[] | update(.col, value, <predicate>)`
 
-(and their jq equivalents)
+Predicates may combine leaf comparisons with `&&` (AND) or `||` (OR).
+
+Operators: `==`, `>`, `>=`, `<`, `<=`.
 
 ## Run
+
+### Lean binaries (one-time, ~30s on warm cache)
+```bash
+cd ProofPilot
+lake update                              # one-time Mathlib fetch
+lake build sqlGenMain sqlGenError sqlGenBug2 sqlGenBug3
+```
+Pass the explicit targets — a bare `lake build` pulls in `Test.lean`, which intentionally fails because Plausible finds the count counter-example in `Error.lean`.
+
+If the binaries aren't built the rest of the app still works; the Lean-derived SQL box just shows a build hint instead.
 
 ### Backend
 ```bash
@@ -46,7 +59,7 @@ pip install -r requirements.txt
 uvicorn main:app --port 8000 --reload
 ```
 
-**Frontend** (separate terminal)
+### Frontend (separate terminal)
 ```bash
 cd frontend
 npm install
@@ -56,25 +69,21 @@ npm run dev
 
 The UI has a **Mock LLM** toggle (on by default) — no API key needed to try it. To use the real Claude API, copy `backend/.env.example` to `backend/.env` and set `ANTHROPIC_API_KEY`.
 
-## Lean proof
+## Origin
 
-```bash
-cd ProofPilot
-lake update   # one-time Mathlib fetch
-lake build
-```
+This project was built during the **LeanLang for Verified Autonomy Hackathon** (April 17–18 + online through May 1, 2026) at the **Indian Institute of Science (IISc), Bangalore**.
+Sponsored by **[Emergence AI](https://www.emergence.ai)**.
+Organized by **[Emergence India Labs](https://east.emergence.ai)** in collaboration with **IISc Bangalore**.
 
 ## Acknowledgments
+
 This project was made possible by:
 - **Emergence AI** — Hackathon sponsor
-- **Emergence India Labs** — Event organizer and
-research direction
-- **Indian Institute of Science (IISc), Bangalore** —
-Academic partner, hackathon co-design, tutorials,
-and mentorship
+- **Emergence India Labs** — Event organizer and research direction
+- **Indian Institute of Science (IISc), Bangalore** — Academic partner, hackathon co-design, tutorials, and mentorship
 
 ## Links
-- [Hackathon Page](https://east.emergence.ai/
-hackathon-april2026.html)
+
+- [Hackathon Page](https://east.emergence.ai/hackathon-april2026.html)
 - [Emergence India Labs](https://east.emergence.ai)
 - [Emergence AI](https://www.emergence.ai)

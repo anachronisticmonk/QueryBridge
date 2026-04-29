@@ -10,8 +10,11 @@ import subprocess
 from pathlib import Path
 
 LEAN_DIR = Path(__file__).resolve().parent.parent / "ProofPilot"
-BIN_MAIN = LEAN_DIR / ".lake" / "build" / "bin" / "sqlGenMain"
-BIN_ERROR = LEAN_DIR / ".lake" / "build" / "bin" / "sqlGenError"
+BIN_DIR = LEAN_DIR / ".lake" / "build" / "bin"
+BIN_MAIN = BIN_DIR / "sqlGenMain"
+BIN_ERROR = BIN_DIR / "sqlGenError"
+BIN_BUG2 = BIN_DIR / "sqlGenBug2"
+BIN_BUG3 = BIN_DIR / "sqlGenBug3"
 
 
 def _normalize(jq_expr: str) -> str:
@@ -26,8 +29,8 @@ def _normalize(jq_expr: str) -> str:
     return jq_expr
 
 
-def run_lean(jq_expr: str, use_error: bool = False) -> dict | None:
-    binary = BIN_ERROR if use_error else BIN_MAIN
+def run_binary(binary: Path, jq_expr: str) -> dict | None:
+    """Invoke an arbitrary lean binary; return parsed JSON or None."""
     if not binary.exists():
         return None
     normalized = _normalize(jq_expr)
@@ -46,3 +49,7 @@ def run_lean(jq_expr: str, use_error: bool = False) -> dict | None:
         return json.loads(proc.stdout)
     except json.JSONDecodeError:
         return None
+
+
+def run_lean(jq_expr: str, use_error: bool = False) -> dict | None:
+    return run_binary(BIN_ERROR if use_error else BIN_MAIN, jq_expr)

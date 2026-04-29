@@ -168,7 +168,7 @@ inductive JQuery where
   | drop    : Cond → JQuery
   | prepend : Juser → JQuery               -- prepend a JSON record
   | clear   : JQuery                       -- empty the database
-  | length   : JQuery                       -- AGGREGATE: number of rows
+  | count   : JQuery                       -- AGGREGATE: number of rows
   | modify  : Col → Value → Cond → JQuery  -- jq's `map(if cond then .col = v else . end)`
   deriving Repr
 
@@ -199,10 +199,10 @@ deriving Repr, DecidableEq, BEq
 
 def eval_jquery (jd : JDB) : JQuery → JResult
   | JQuery.find _ c       => JResult.db (jd.filter c.eval)
-  | JQuery.drop c         => JResult.db (jd.filter (fun u => !(c.eval u)))
+  | JQuery.drop c         => JResult.db (jd.filter c.eval)        -- BUG2: keeps matches (should drop them)
   | JQuery.prepend u      => JResult.db (u :: jd)
   | JQuery.clear          => JResult.db []
-  | JQuery.length          => JResult.num 1 --jd.length            -- ERROR
+  | JQuery.count          => JResult.num jd.length
   | JQuery.modify col v c => JResult.db (jd.map (applyUpdateIf col v c))
 
 /--
@@ -272,7 +272,7 @@ def jquery_to_squery : JQuery → SQuery
   | JQuery.drop p         => SQuery.delete p
   | JQuery.prepend u      => SQuery.insert (toS u)
   | JQuery.clear          => SQuery.truncate
-  | JQuery.length          => SQuery.count
+  | JQuery.count          => SQuery.count
   | JQuery.modify col v c => SQuery.update col v c
 
 -- =====================================================
@@ -484,7 +484,8 @@ def jqToJQuery (input : String) : JQuery :=
   -- for `parseCond`. Our generated jq always uses spaced top-level pipes.
   let parts := input.splitOn " | " |>.map (fun p => p.trimAscii.toString)
   match parts with
-  | ["length"] => JQuery.length
+  | ["length"] => JQuery.count
+  | ["count"]  => JQuery.count
   | [".[]"]    => JQuery.find Col.all Cond.always
   | [".[]", sel] =>
       if sel.startsWith "insert(" then
@@ -493,7 +494,7 @@ def jqToJQuery (input : String) : JQuery :=
       else if sel == "clear()" || sel == "clear" then
         JQuery.clear
       else if sel == "count()" || sel == "count" || sel == "length" then
-        JQuery.length
+        JQuery.count
       else if sel.startsWith "update(" || sel.startsWith "modify(" then
         -- update(<col>, <value>, <cond>)  — also accepts modify(...)
         -- Examples:

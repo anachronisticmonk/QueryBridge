@@ -27,13 +27,13 @@ open Lean
 -- this default does not affect result equivalence.
 -- =====================================================
 def seedDB : JDB := [
-  { name := "Alice",   age := 30, role := Role.student },
+  { name := "Alice",   age := 30, role := Role.employee },
   { name := "Bob",     age := 25, role := Role.student },
-  { name := "Charlie", age := 35, role := Role.student },
+  { name := "Charlie", age := 35, role := Role.employee },
   { name := "Diana",   age := 28, role := Role.student },
-  { name := "Eve",     age := 42, role := Role.student },
-  { name := "Frank",   age := 19, role := Role.student },
-  { name := "Grace",   age := 31, role := Role.student }
+  { name := "Eve",     age := 42, role := Role.retired },
+  { name := "Frank",   age := 19, role := Role.retired },
+  { name := "Grace",   age := 31, role := Role.employee }
 ]
 
 -- =====================================================

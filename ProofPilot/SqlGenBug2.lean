@@ -14,7 +14,7 @@
 -- arm. If anyone perturbs eval_squery in Error.lean, the demo
 -- semantics change. Keep eval_squery in lockstep with Main.lean.
 
-import Error
+import Bug2
 import Lean.Data.Json
 
 open Lean

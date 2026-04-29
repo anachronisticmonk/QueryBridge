@@ -526,3 +526,4 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : permEquiv jd sd) :
       rw [hbridge, toRows_map_reconstruct]
       exact h.map (apply_update_ifS col v c)
     exact permEquiv_implies_equiv hPerm
+

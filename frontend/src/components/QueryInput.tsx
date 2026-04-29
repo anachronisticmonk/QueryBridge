@@ -3,8 +3,12 @@ const EXAMPLES = [
   'find users older than 30',
   'get names of users under 25',
   'find Alice',
+  'find users whose role is employee',
+  'find users whose name is Bob and age > 20',
   'delete users younger than 25',
   'how many users',
+  'insert a user with name Vimala, age 21, role student',
+  'change the name to Vimala for any user whose current name is Eve',
 ]
 
 interface Props {

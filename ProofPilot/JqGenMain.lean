@@ -41,6 +41,10 @@ partial def parseCond (s : String) : Cond :=
     | Col.age => Value.nat unquoted.toNat!
     | _       => Value.str unquoted
 
+  let orParts := s'.splitOn "||"
+  if orParts.length > 1 then
+    Cond.or (parseCond orParts.head!) (parseCond ("||".intercalate orParts.tail!))
+  else
   let andParts := s'.splitOn "&&"
   if andParts.length > 1 then
     Cond.and (parseCond andParts.head!) (parseCond ("&&".intercalate andParts.tail!))
@@ -87,7 +91,9 @@ def parseUser (s : String) : Juser :=
   | _ => { name := "", age := 0, role := Role.student }
 
 def jqToJQuery (input : String) : JQuery :=
-  let parts := input.splitOn "|" |>.map (fun p => p.trimAscii.toString)
+  -- Split on " | " (with spaces) so that `||` inside predicates is left intact
+  -- for `parseCond`. Our generated jq always uses spaced top-level pipes.
+  let parts := input.splitOn " | " |>.map (fun p => p.trimAscii.toString)
   match parts with
   | ["length"] => JQuery.length
   | [".[]"]    => JQuery.find Col.all Cond.always

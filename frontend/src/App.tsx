@@ -4,6 +4,8 @@ import { runQuery } from './api'
 import QueryInput from './components/QueryInput'
 import Pipeline from './components/Pipeline'
 import SplitResults from './components/SplitResults'
+import DatabaseViewer from './components/DatabaseViewer'
+import CounterExampleGallery from './components/CounterExampleGallery'
 
 export default function App() {
   const [nl, setNl] = useState('')
@@ -12,6 +14,7 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<QueryResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [view, setView] = useState<'query' | 'gallery'>('query')
 
   async function handleRun(query: string) {
     if (!query.trim()) return
@@ -37,11 +40,32 @@ export default function App() {
           <h1>QueryBridge</h1>
         </div>
         <p className="tagline">
-          Natural language queries, formally verified jq ↔ SQL equivalence
+          Formally verified jq → SQL translation
         </p>
+        <div className="header-actions">
+          <DatabaseViewer />
+          <div className="view-switch" role="tablist">
+            <button
+              className={`view-tab${view === 'query' ? ' active' : ''}`}
+              onClick={() => setView('query')}
+            >
+              Query
+            </button>
+            <button
+              className={`view-tab${view === 'gallery' ? ' active' : ''}`}
+              onClick={() => setView('gallery')}
+            >
+              Counter-examples
+            </button>
+          </div>
+        </div>
       </header>
 
       <main className="app-main">
+        {view === 'gallery' ? (
+          <CounterExampleGallery />
+        ) : (
+        <>
         <section className="section-query">
           <QueryInput
             value={nl}
@@ -90,6 +114,8 @@ export default function App() {
             </div>
           </details>
         </section>
+        </>
+        )}
       </main>
     </div>
   )

@@ -1,9 +1,9 @@
 USERS = [
-    {"name": "Alice",   "age": 30},
-    {"name": "Bob",     "age": 25},
-    {"name": "Charlie", "age": 35},
-    {"name": "Diana",   "age": 28},
-    {"name": "Eve",     "age": 42},
-    {"name": "Frank",   "age": 19},
-    {"name": "Grace",   "age": 31},
+    {"name": "Alice",   "age": 30, "role": "employee"},
+    {"name": "Bob",     "age": 25, "role": "student"},
+    {"name": "Charlie", "age": 35, "role": "employee"},
+    {"name": "Diana",   "age": 28, "role": "student"},
+    {"name": "Eve",     "age": 42, "role": "retired"},
+    {"name": "Frank",   "age": 19, "role": "retired"},
+    {"name": "Grace",   "age": 31, "role": "employee"},
 ]

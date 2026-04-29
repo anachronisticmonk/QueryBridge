@@ -140,7 +140,7 @@ def Cond.evalS : Cond → Suser → Bool
 def applyUpdate (col : Col) (v : Value) (u : Juser) : Juser :=
   match col, v with
   | Col.name, Value.str s  => { u with name := s }
-  | Col.age,  Value.nat n  => { u with age := n }
+  | Col.age,  Value.nat _  => { u with age := 0 }   -- BUG3: zeroes age regardless of v
   | Col.role, Value.role r => { u with role := r }
   | _, _                   => u   -- type mismatch or Col.all → no-op
 
@@ -168,7 +168,7 @@ inductive JQuery where
   | drop    : Cond → JQuery
   | prepend : Juser → JQuery               -- prepend a JSON record
   | clear   : JQuery                       -- empty the database
-  | length   : JQuery                       -- AGGREGATE: number of rows
+  | count   : JQuery                       -- AGGREGATE: number of rows
   | modify  : Col → Value → Cond → JQuery  -- jq's `map(if cond then .col = v else . end)`
   deriving Repr
 
@@ -202,7 +202,7 @@ def eval_jquery (jd : JDB) : JQuery → JResult
   | JQuery.drop c         => JResult.db (jd.filter (fun u => !(c.eval u)))
   | JQuery.prepend u      => JResult.db (u :: jd)
   | JQuery.clear          => JResult.db []
-  | JQuery.length          => JResult.num 1 --jd.length            -- ERROR
+  | JQuery.count          => JResult.num jd.length
   | JQuery.modify col v c => JResult.db (jd.map (applyUpdateIf col v c))
 
 /--
@@ -272,125 +272,10 @@ def jquery_to_squery : JQuery → SQuery
   | JQuery.drop p         => SQuery.delete p
   | JQuery.prepend u      => SQuery.insert (toS u)
   | JQuery.clear          => SQuery.truncate
-  | JQuery.length          => SQuery.count
+  | JQuery.count          => SQuery.count
   | JQuery.modify col v c => SQuery.update col v c
 
--- =====================================================
--- 8. Proofs
--- =====================================================
-
-theorem getVal_bridge (col : Col) (u : Juser) :
-  getVal col u = getValS col (toS u) := by
-  cases col <;> cases u <;> simp [getVal, getValS, toS]
-
-theorem eval_bridge (c : Cond) (u : Juser) :
-  c.eval u = c.evalS (toS u) := by
-  induction c generalizing u with
-  | always => simp [Cond.eval, Cond.evalS]
-  | cmp col op v => simp [Cond.eval, Cond.evalS, getVal_bridge]
-  | and c₁ c₂ ih₁ ih₂ => simp [Cond.eval, Cond.evalS, ih₁, ih₂]
-  | or c₁ c₂ ih₁ ih₂ => simp [Cond.eval, Cond.evalS, ih₁, ih₂]
-
-theorem eval_bridge_S (c : Cond) (s : Suser) :
-  c.evalS s = c.eval (toJ s) := by
-  induction c generalizing s with
-  | always => rfl
-  | cmp col op v =>
-    obtain ⟨n, a, r⟩ := s
-    cases col <;> rfl
-  | and c₁ c₂ ih₁ ih₂ =>
-    simp only [Cond.eval, Cond.evalS]
-    rw [ih₁, ih₂]
-  | or c₁ c₂ ih₁ ih₂ =>
-    simp only [Cond.eval, Cond.evalS]
-    rw [ih₁, ih₂]
-
-theorem db_equiv_bridge (jd : JDB) (sd : SDB) :
-    equiv jd sd ↔ (∀ u, u ∈ jd ↔ toS u ∈ sd.toRows) ∧ (∀ s, s ∈ sd.toRows ↔ toJ s ∈ jd) := by
-  simp [equiv, SDB.toRows]
-
-/-- Round-trip for 3-way zip: rebuilding three columns from a list of
-    triples and zipping them back recovers the original triple list. --/
-theorem zip3_map_components {α β γ : Type} (xs : List (α × β × γ)) :
-    zip3 (xs.map (·.1)) (xs.map (·.2.1)) (xs.map (·.2.2)) = xs := by
-  induction xs with
-  | nil => rfl
-  | cons x xs ih =>
-    obtain ⟨a, b, c⟩ := x
-    simp only [List.map, zip3]
-    exact congrArg _ ih
-
-theorem toRows_filter_reconstruct (sd : SDB) (p : Suser → Bool) :
-    (SDB.mk (sd.toRows.filter p |>.map (·.1))
-            (sd.toRows.filter p |>.map (·.2.1))
-            (sd.toRows.filter p |>.map (·.2.2))).toRows
-    = sd.toRows.filter p := by
-  simp only [SDB.toRows]
-  exact zip3_map_components (zip3 sd.names sd.ages sd.roles |>.filter p)
-
-theorem toRows_insert (s : Suser) (sd : SDB) :
-    (SDB.mk (s.1 :: sd.names) (s.2.1 :: sd.ages) (s.2.2 :: sd.roles)).toRows
-    = s :: sd.toRows := by
-  obtain ⟨n, a, r⟩ := s
-  rfl
-
-/-- Per-row update commutes with `toS`. -/
-theorem applyUpdate_bridge (col : Col) (v : Value) (u : Juser) :
-    applyUpdateS col v (toS u) = toS (applyUpdate col v u) := by
-  obtain ⟨n, a, r⟩ := u
-  cases col <;> cases v <;> simp [applyUpdate, applyUpdateS, toS]
-
-/-- Conditional update commutes with `toS` (uses eval_bridge for the guard). -/
-theorem applyUpdateIf_bridge (col : Col) (v : Value) (c : Cond) (u : Juser) :
-    applyUpdateIfS col v c (toS u) = toS (applyUpdateIf col v c u) := by
-  unfold applyUpdateIfS applyUpdateIf
-  rw [← eval_bridge c u]
-  cases h : c.eval u with
-  | true  => simp [applyUpdate_bridge]
-  | false => simp
-
-/-- Round-trip for map: rebuild columns from a mapped row list recovers
-    the rows. The `map` analogue of `toRows_filter_reconstruct`. -/
-theorem toRows_map_reconstruct (sd : SDB) (f : Suser → Suser) :
-    (SDB.mk ((sd.toRows.map f).map (·.1))
-            ((sd.toRows.map f).map (·.2.1))
-            ((sd.toRows.map f).map (·.2.2))).toRows
-    = sd.toRows.map f := by
-  simp only [SDB.toRows]
-  exact zip3_map_components (zip3 sd.names sd.ages sd.roles |>.map f)
-
-/-- Permutation equivalence implies set equivalence. The DB-returning
-    cases of `query_equiv` are inherited from this fact. --/
-theorem permEquiv_implies_equiv {jd : JDB} {sd : SDB} (h : permEquiv jd sd) :
-    equiv jd sd := by
-  unfold permEquiv at h
-  refine ⟨?_, ?_⟩
-  · intro u
-    constructor
-    · intro hu
-      have h1 : toS u ∈ jd.map toS := List.mem_map_of_mem hu
-      exact h.mem_iff.mp h1
-    · intro hu
-      have h1 : toS u ∈ jd.map toS := h.mem_iff.mpr hu
-      obtain ⟨v, hv, hvu⟩ := List.mem_map.mp h1
-      have heq : v = u := by
-        have := congrArg toJ hvu
-        simpa using this
-      exact heq ▸ hv
-  · intro s
-    constructor
-    · intro hs
-      have h1 : s ∈ jd.map toS := h.mem_iff.mpr hs
-      obtain ⟨v, hv, hvs⟩ := List.mem_map.mp h1
-      have : toJ s = v := by
-        have h2 := congrArg toJ hvs
-        simpa using h2.symm
-      exact this ▸ hv
-    · intro hs
-      have h1 : toS (toJ s) ∈ jd.map toS := List.mem_map_of_mem hs
-      have h2 : toS (toJ s) = s := toS_toJ s
-      rw [h2] at h1
-      exact h.mem_iff.mp h1
+-- (Section 8 "Proofs" omitted: applyUpdate is intentionally buggy here.)
 
 -- =====================================================
 -- 9. Parser Logic
@@ -484,7 +369,8 @@ def jqToJQuery (input : String) : JQuery :=
   -- for `parseCond`. Our generated jq always uses spaced top-level pipes.
   let parts := input.splitOn " | " |>.map (fun p => p.trimAscii.toString)
   match parts with
-  | ["length"] => JQuery.length
+  | ["length"] => JQuery.count
+  | ["count"]  => JQuery.count
   | [".[]"]    => JQuery.find Col.all Cond.always
   | [".[]", sel] =>
       if sel.startsWith "insert(" then
@@ -493,7 +379,7 @@ def jqToJQuery (input : String) : JQuery :=
       else if sel == "clear()" || sel == "clear" then
         JQuery.clear
       else if sel == "count()" || sel == "count" || sel == "length" then
-        JQuery.length
+        JQuery.count
       else if sel.startsWith "update(" || sel.startsWith "modify(" then
         -- update(<col>, <value>, <cond>)  — also accepts modify(...)
         -- Examples:

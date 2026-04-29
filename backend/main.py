@@ -8,6 +8,7 @@ from translator import translate
 from executor import run_jq, run_sql
 from llm_client import nl_to_jq
 from lean_client import run_lean
+from counterexample_runner import collect_counterexamples
 
 load_dotenv()
 
@@ -79,6 +80,11 @@ def run_query(req: QueryRequest):
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/counterexamples")
+def counterexamples():
+    return {"items": collect_counterexamples()}
 
 
 @app.get("/health")
