@@ -18,6 +18,17 @@ To achieve this, we:
 
 If the JSON and SQL databases start out equivalent, then running a jq query on the JSON database and its translated SQL query on the SQL database will produce **equivalent results**.
 
+## Origin
+
+This project was built during the **LeanLang for Verified
+Autonomy Hackathon** (April 17–18 + online through May 1,
+2026) at the **Indian Institute of Science (IISc),
+Bangalore**.
+Sponsored by **[Emergence AI](https://www.emergence.ai)**
+Organized by **[Emergence India Labs]
+(https://east.emergence.ai)** in collaboration with
+**IISc Bangalore**.
+
 ## Supported Queries
 
 - `SELECT *`  
@@ -52,3 +63,18 @@ cd ProofPilot
 lake update   # one-time Mathlib fetch
 lake build
 ```
+
+## Acknowledgments
+This project was made possible by:
+- **Emergence AI** — Hackathon sponsor
+- **Emergence India Labs** — Event organizer and
+research direction
+- **Indian Institute of Science (IISc), Bangalore** —
+Academic partner, hackathon co-design, tutorials,
+and mentorship
+
+## Links
+- [Hackathon Page](https://east.emergence.ai/
+hackathon-april2026.html)
+- [Emergence India Labs](https://east.emergence.ai)
+- [Emergence AI](https://www.emergence.ai)
