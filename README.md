@@ -23,14 +23,15 @@ If the JSON and SQL databases start out equivalent, then running a jq query on t
 
 ## How the proof reaches the running app
 
-The Lean proof isn't a side document — the backend actually executes it. A small Lean binary (`jqGenMain`) parses the jq string into the verified `JQuery` AST. The proven-correct `jquery_to_squery` then converts the `JQuery` into an `SQuery`, and a second binary (`sqlGenMain`) templatizes that `SQuery` value into an executable SQL string. The result shows up in the UI as **"SQL (Lean-derived)"** alongside the unverified `translator.py` output. Both queries run on identical seed data; the proof rules out any case where the two result panels could disagree. For example, the end-to-end flow is shown in the GUI screenshot below.
+The Lean proof isn't a side document — the backend actually executes it. A small Lean binary (`ProofPilot/jqGenMain`) parses the jq string into the verified `JQuery` AST. The proven-correct `jquery_to_squery` in `ProofPilot/Main` then converts the `JQuery` into an `SQuery`, and a second binary (`ProofPilot/sqlGenMain`) templatizes that `SQuery` value into an executable SQL string. The result shows up in the UI as **"SQL (Lean-derived)"** alongside the unverified `translator.py` output. Both queries run on identical seed data; the proof rules out any case where the two result panels could disagree. For example, the end-to-end flow is shown in the GUI screenshot below.
 ![QueryBridge UI](figures/endtoend.png)
 
 ### Counter-example generation using Plausible
 
 We use Plausible to write property-based tests that automatically search for counterexamples. To showcase this, `ProofPilot/Error.lean` is a near-duplicate of `Main.lean` seeded with four deliberate bugs — for instance, `eval_jquery JQuery.modify` always returns `[]` regardless of the database. The `prop_modify_preserves_count` test in `Tests.lean` checks that a `modify` query never changes the row count (since modify only rewrites fields, never adds or removes users). Plausible fails to prove this property and generates a counterexample like the one below: a database with a single user where, due to the bug, the length after `modify` is `0` instead of `1`. 
-![QueryBridge UI](figures/plausible.png)
-
+<p align="center">
+  <img src="figures/plausible.png" width="75%">
+</p>
 
 ## Supported Queries
 
