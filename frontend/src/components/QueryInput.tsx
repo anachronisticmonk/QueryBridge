@@ -6,6 +6,7 @@ const EXAMPLES = [
   'find users whose role is employee',
   'find users whose name is Bob and age > 20',
   'delete users younger than 25',
+  'delete all users',
   'how many users',
   'insert a user with name Vimala, age 21, role student',
   'change the name to Vimala for any user whose current name is Eve',
@@ -18,11 +19,9 @@ interface Props {
   loading: boolean
   useMock: boolean
   onToggleMock: () => void
-  useError: boolean
-  onToggleError: () => void
 }
 
-export default function QueryInput({ value, onChange, onRun, loading, useMock, onToggleMock, useError, onToggleError }: Props) {
+export default function QueryInput({ value, onChange, onRun, loading, useMock, onToggleMock }: Props) {
   function handleKey(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       onRun(value)
@@ -48,16 +47,10 @@ export default function QueryInput({ value, onChange, onRun, loading, useMock, o
         ))}
       </div>
       <div className="query-controls">
-        <div className="toggle-group">
-          <label className="mock-toggle">
-            <input type="checkbox" checked={useMock} onChange={onToggleMock} />
-            Mock LLM (no API key needed)
-          </label>
-          <label className="bug-toggle" title="Run the buggy variant Error.lean instead of Main.lean — counter-example surfaces on count queries.">
-            <input type="checkbox" checked={useError} onChange={onToggleError} />
-            Use buggy variant (Error.lean)
-          </label>
-        </div>
+        <label className="mock-toggle">
+          <input type="checkbox" checked={useMock} onChange={onToggleMock} />
+          Mock LLM (no API key needed)
+        </label>
         <button
           className="run-btn"
           onClick={() => onRun(value)}

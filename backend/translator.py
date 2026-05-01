@@ -13,6 +13,7 @@ Supported jq patterns:
   .[] | select(<predicate>)
   .[] | select(<predicate>) | .FIELD
   del(.[] | select(<predicate>))
+  del(.[])
   length
   .[] | insert("name", age, "role")
   .[] | update(.field, value, <predicate>)
@@ -33,6 +34,7 @@ _UNSUPPORTED_MSG = (
     "  .[] | select(<predicate>)\n"
     "  .[] | select(<predicate>) | .col\n"
     "  del(.[] | select(<predicate>))\n"
+    "  del(.[])\n"
     "  length\n"
     '  .[] | insert("name", age, "role")\n'
     "  .[] | update(.col, value, <predicate>)\n\n"
@@ -177,6 +179,19 @@ def translate(jq_expr: str) -> dict:
             "insert_user": None,
             "update_col": col,
             "update_value": py_val,
+        }
+
+    # del(.[]) — unconditional delete (mirrors Lean's JQuery.clear → SQuery.truncate)
+    if re.match(r'^del\(\s*\.\[\]\s*\)$', jq):
+        return {
+            "type": "delete",
+            "col": None,
+            "pred_tree": None,
+            "sql": "DELETE FROM users",
+            "display_sql": "DELETE FROM users",
+            "insert_user": None,
+            "update_col": None,
+            "update_value": None,
         }
 
     # del(.[] | select(PRED))

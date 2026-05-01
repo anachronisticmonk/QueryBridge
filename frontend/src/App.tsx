@@ -4,17 +4,18 @@ import { runQuery } from './api'
 import QueryInput from './components/QueryInput'
 import Pipeline from './components/Pipeline'
 import SplitResults from './components/SplitResults'
+import ProofWitnessPanel from './components/ProofWitnessPanel'
 import DatabaseViewer from './components/DatabaseViewer'
-import CounterExampleGallery from './components/CounterExampleGallery'
+import PropertyResults from './components/PropertyResults'
+import ProofResults from './components/ProofResults'
 
 export default function App() {
   const [nl, setNl] = useState('')
   const [useMock, setUseMock] = useState(true)
-  const [useError, setUseError] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<QueryResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [view, setView] = useState<'query' | 'gallery'>('query')
+  const [view, setView] = useState<'query' | 'proofs' | 'properties'>('query')
 
   async function handleRun(query: string) {
     if (!query.trim()) return
@@ -23,7 +24,7 @@ export default function App() {
     setError(null)
     setResult(null)
     try {
-      const r = await runQuery(query, useMock, useError)
+      const r = await runQuery(query, useMock)
       setResult(r)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -52,18 +53,26 @@ export default function App() {
               Query
             </button>
             <button
-              className={`view-tab${view === 'gallery' ? ' active' : ''}`}
-              onClick={() => setView('gallery')}
+              className={`view-tab${view === 'proofs' ? ' active' : ''}`}
+              onClick={() => setView('proofs')}
             >
-              Counter-examples
+              Proofs
+            </button>
+            <button
+              className={`view-tab${view === 'properties' ? ' active' : ''}`}
+              onClick={() => setView('properties')}
+            >
+              Property tests
             </button>
           </div>
         </div>
       </header>
 
       <main className="app-main">
-        {view === 'gallery' ? (
-          <CounterExampleGallery />
+        {view === 'properties' ? (
+          <PropertyResults />
+        ) : view === 'proofs' ? (
+          <ProofResults />
         ) : (
         <>
         <section className="section-query">
@@ -74,8 +83,6 @@ export default function App() {
             loading={loading}
             useMock={useMock}
             onToggleMock={() => setUseMock(v => !v)}
-            useError={useError}
-            onToggleError={() => setUseError(v => !v)}
           />
         </section>
 
@@ -91,29 +98,11 @@ export default function App() {
           </section>
         )}
 
-        <section className="section-proof-teaser">
-          <details>
-            <summary>
-              <span className="proof-badge">∀</span>
-              Formal Verification — Lean 4
-            </summary>
-            <div className="proof-content">
-              <p>
-                The translation from jq to SQL is backed by theorem{' '}
-                <code>query_equiv</code> in <code>ProofPilot/Main.lean</code>.
-              </p>
-              <p>
-                The theorem proves: given two databases holding the same data
-                (one as JSON, one as SQL rows), for every result{' '}
-                <code>res</code>, <code>res ∈ eval_jquery jd jq ↔ res ∈
-                eval_squery sd (jqueryToSquery jq)</code>.
-              </p>
-              <p className="proof-note">
-                Proof display coming soon.
-              </p>
-            </div>
-          </details>
-        </section>
+        {result && result.proof_witness && (
+          <section className="section-proof-witness">
+            <ProofWitnessPanel witness={result.proof_witness} />
+          </section>
+        )}
         </>
         )}
       </main>

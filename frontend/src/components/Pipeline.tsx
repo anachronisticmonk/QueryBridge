@@ -12,9 +12,7 @@ export default function Pipeline({ nl, result, loading, error }: Props) {
     return <div className="pipeline-error">{error}</div>
   }
 
-  const buggy = result?.lean_used_error === true
   const showLeanBox = !!result?.lean_sql || (loading && !result)
-  const leanArrowClass = `pipeline-arrow lean${buggy ? ' error' : ''}`
 
   return (
     <div className={`pipeline${showLeanBox ? '' : ' compact'}`}>
@@ -64,14 +62,10 @@ export default function Pipeline({ nl, result, loading, error }: Props) {
       {showLeanBox && (
         <>
           {/* Arrow: Lean-derived (the verified path) */}
-          <div className={leanArrowClass}>
+          <div className="pipeline-arrow lean">
             <span className="arrow-label">Lean 4</span>
             <span className="arrow-line" />
-            {buggy ? (
-              <span className="warning-badge">⚠ Buggy variant</span>
-            ) : (
-              <span className="verified-badge">✓ Proven</span>
-            )}
+            <span className="verified-badge">✓ Proven</span>
           </div>
 
           {/* Box 4 — Lean-derived SQL */}

@@ -11,9 +11,13 @@ You MUST output only a jq expression matching ONE of these patterns:
   2. .[] | select(<predicate>)
   3. .[] | select(<predicate>) | .FIELD
   4. del(.[] | select(<predicate>))
-  5. length
-  6. .[] | insert("NAME", AGE, "ROLE")
-  7. .[] | update(.FIELD, VALUE, <predicate>)
+  5. del(.[])
+  6. length
+  7. .[] | insert("NAME", AGE, "ROLE")
+  8. .[] | update(.FIELD, VALUE, <predicate>)
+
+Use pattern 5 (del(.[])) for "delete all", "remove all", "clear table",
+"empty the table", "wipe everyone" — i.e. any unconditional bulk delete.
 
 Predicates may combine leaf comparisons with `&&` (AND) or `||` (OR). Examples:
   .name == "Bob" && .age > 20
@@ -96,6 +100,13 @@ def _build(nl_lower: str) -> str | None:
 
 
 _MOCK_RULES: list[tuple[list[str], list[str], str]] = [
+    # Unconditional bulk delete — must come before any predicate-delete rule and
+    # before the catch-all .[] rule. Requires both a delete verb and an explicit
+    # bulk indicator so that "delete users younger than 25" still routes to the
+    # predicate-delete rule below.
+    (["delet", "remov", "clear", "wipe", "empty"],
+     ["all", "every", "everyone", "everybody", "everything", "table"],
+     "del(.[])"),
     (["delet", "remov"],  ["young", "< 25", "under 25", "less than 25", "below 25"],   "del(.[] | select(.age < 25))"),
     (["delet", "remov"],  ["old", "> 30", "over 30", "older than 30", "above 30"],     "del(.[] | select(.age > 30))"),
     (["name", "names"],   ["over 30", "> 30", "older than 30", "above 30"],            ".[] | select(.age > 30) | .name"),

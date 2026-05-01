@@ -139,6 +139,29 @@ def resultsMatch : JResult → SResult → Bool
   | .num n,  .num m  => n = m
   | _,       _       => false
 
+-- Identify which arm of the `query_equiv` proof governs this jq.
+-- Each `JQuery` constructor corresponds to a distinct `cases jq` branch
+-- in the proof of `query_equiv` in Main.lean. The string we return
+-- here lets the QueryBridge backend pull the matching source span.
+def jqueryCaseTag : JQuery → String
+  | .find _ _     => "find"
+  | .drop _       => "drop"
+  | .prepend _    => "prepend"
+  | .clear        => "clear"
+  | .length       => "length"
+  | .modify _ _ _ => "modify"
+
+-- A short summary of the matching SQuery constructor — what
+-- `jquery_to_squery jq` reduces to symbolically. This is the
+-- proof's translation step made explicit.
+def squeryCaseTag : SQuery → String
+  | .select _ _   => "SQuery.select"
+  | .delete _     => "SQuery.delete"
+  | .insert _     => "SQuery.insert"
+  | .truncate     => "SQuery.truncate"
+  | .count        => "SQuery.count"
+  | .update _ _ _ => "SQuery.update"
+
 -- =====================================================
 -- Main
 -- =====================================================
@@ -151,10 +174,16 @@ def main (args : List String) : IO Unit := do
   let sr := eval_squery (jdbToSdb seedDB) sq
   let m  := resultsMatch jr sr
   let out := Json.mkObj [
-    ("sql",       .str sql),
-    ("jq",        .str input),
-    ("jq_result", jrToJson jr),
-    ("sq_result", srToJson sr),
-    ("match",     .bool m)
+    ("sql",          .str sql),
+    ("jq",           .str input),
+    ("jq_result",    jrToJson jr),
+    ("sq_result",    srToJson sr),
+    ("match",        .bool m),
+    -- Proof-witness fields. These name the specific arm of
+    -- `query_equiv` (and the SQuery constructor it maps to)
+    -- that governs THIS jq, so the backend can fetch the
+    -- exact proof source span from Main.lean.
+    ("jquery_case",  .str (jqueryCaseTag jq)),
+    ("squery_case",  .str (squeryCaseTag sq))
   ]
   IO.println out.compress

@@ -56,36 +56,14 @@ export default function SplitResults({ result }: Props) {
   const sqlRows = result.sql_results
 
   const subtitle = isDelete ? 'Remaining rows after DELETE' : `${result.jq_results.length} row(s)`
-  const ce = result.counterexample
 
   return (
     <div className="split-results">
-      {ce && (
-        <div className="counterexample-alert">
-          <div className="ce-header">✗ Counter-example: equivalence violated</div>
-          <div className="ce-body">
-            <div>
-              <span className="ce-label">eval_jquery (buggy):</span>{' '}
-              <code>{JSON.stringify(ce.jq_result)}</code>
-            </div>
-            <div>
-              <span className="ce-label">eval_squery (correct):</span>{' '}
-              <code>{JSON.stringify(ce.sql_result)}</code>
-            </div>
-            <div className="ce-explanation">{ce.explanation}</div>
-          </div>
-        </div>
-      )}
-
       <div className="results-header">
         <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
           Running both queries on identical data…
         </span>
-        {ce ? (
-          <span className="results-match-badge failed">✗ Equivalence broken</span>
-        ) : (
-          <span className="results-match-badge">✓ Machine-verified equivalence</span>
-        )}
+        <span className="results-match-badge">✓ Machine-verified equivalence</span>
       </div>
 
       <div className="results-panels">

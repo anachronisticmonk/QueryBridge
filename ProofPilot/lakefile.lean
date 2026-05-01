@@ -12,7 +12,7 @@ require plausible from git
 
 @[default_target]
 lean_lib «ProofPilot» where
-  roots := #[`Main, `Error, `Bug2, `Bug3, `Test, `SqlGenMain, `SqlGenError, `JqGenMain]
+  roots := #[`Main, `Error, `Bug2, `Bug3, `Properties, `Test, `SqlGenMain, `SqlGenError, `JqGenMain, `PropRunner, `ProofTrace]
 
 lean_exe sqlGenMain where
   root := `SqlGenMain
@@ -28,6 +28,12 @@ lean_exe sqlGenBug3 where
 
 lean_exe jqGenMain where
   root := `JqGenMain
+
+lean_exe propRunner where
+  root := `PropRunner
+
+lean_exe proofTrace where
+  root := `ProofTrace
 
 lean_exe test where
   root := `Test

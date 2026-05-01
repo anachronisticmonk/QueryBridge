@@ -144,7 +144,12 @@ def jqToJQuery (input : String) : JQuery :=
         | _ => JQuery.modify Col.all (Value.str "") Cond.always
       else
         let inner := sel.replace "select(" "" |>.replace "delete(" "" |>.replace ")" ""
-        if sel.startsWith "delete(" then JQuery.drop (parseCond inner)
+        if sel.startsWith "delete(" then
+          -- Unconditional bulk delete: `delete(.[])` maps to JQuery.clear so
+          -- the SQL emitter renders it as `DELETE FROM users` (no WHERE clause)
+          -- via the proven SQuery.truncate case.
+          if inner.trimAscii.toString == ".[]" then JQuery.clear
+          else JQuery.drop (parseCond inner)
         else JQuery.find Col.all (parseCond inner)
   | [".[]", sel, projection] =>
       -- .[] | select(<cond>) | .<col>

@@ -11,7 +11,8 @@ from translator import translate
 from executor import run_jq, run_sql
 from llm_client import nl_to_jq
 from lean_client import run_lean
-from counterexample_runner import collect_counterexamples
+from counterexample_runner import collect_counterexamples, collect_proof_traces
+from proof_witness import build_witness
 
 load_dotenv()
 
@@ -27,22 +28,6 @@ app.add_middleware(
 class QueryRequest(BaseModel):
     natural_language: str
     mock: bool = True
-    use_error: bool = False
-
-
-def _explain_counterexample(payload: dict) -> str:
-    jq_r = payload.get("jq_result")
-    sq_r = payload.get("sq_result")
-    if isinstance(jq_r, dict) and isinstance(sq_r, dict) and "count" in jq_r and "count" in sq_r:
-        return (
-            f"Buggy eval_jquery returned count={jq_r['count']} but the correct "
-            f"eval_squery returned count={sq_r['count']}. The proof of "
-            f"query_equiv would refuse to type-check against this implementation."
-        )
-    return (
-        "eval_jquery and eval_squery diverged on this input — the equivalence "
-        "theorem does not hold for this evaluator pair."
-    )
 
 
 @app.get("/api/data")
@@ -58,15 +43,10 @@ def run_query(req: QueryRequest):
         jq_results = run_jq(USERS, query)
         sql_cols, sql_results = run_sql(query["sql"], USERS)
 
-        lean_payload = run_lean(jq_expr, use_error=req.use_error)
+        lean_payload = run_lean(jq_expr)
         lean_sql = lean_payload["sql"] if lean_payload else None
-        counterexample = None
-        if lean_payload and lean_payload.get("match") is False:
-            counterexample = {
-                "jq_result": lean_payload.get("jq_result"),
-                "sql_result": lean_payload.get("sq_result"),
-                "explanation": _explain_counterexample(lean_payload),
-            }
+        case_tag = lean_payload.get("jquery_case") if lean_payload else None
+        proof_witness = build_witness(case_tag, lean_payload) if case_tag else None
 
         return {
             "jq": jq_expr,
@@ -78,16 +58,28 @@ def run_query(req: QueryRequest):
             "sql_columns": sql_cols,
             "verified": True,
             "lean_sql": lean_sql,
-            "lean_used_error": req.use_error,
-            "counterexample": counterexample,
+            "proof_witness": proof_witness,
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/api/counterexamples")
-def counterexamples():
-    return {"items": collect_counterexamples()}
+@app.get("/api/properties")
+def properties():
+    """Run Plausible against the Error.lean evaluator via the
+    `propRunner` Lean binary and return its structured TestResult
+    JSON. See backend/counterexample_runner.py for the shape."""
+    return collect_counterexamples()
+
+
+@app.get("/api/proofs")
+def proofs():
+    """Ask the Lean kernel (via the `proofTrace` binary) to load
+    Main.lean's environment, then for each named theorem report
+    its statement, the axioms it transitively depends on, and
+    whether `sorryAx` is in that set (`status: "verified"` iff not).
+    See backend/counterexample_runner.py for the shape."""
+    return collect_proof_traces()
 
 
 @app.get("/health")
