@@ -47,6 +47,20 @@ Predicates may combine leaf comparisons with `&&` (AND) or `||` (OR).
 
 Operators: `==`, `>`, `>=`, `<`, `<=`.
 
+## Folder structure
+
+- **`ProofPilot/`** — Lean 4 sources for the formal verification of the translation.
+  - `Main.lean` — JSON/SQL database models, jq and SQL query languages, and the mechanized correctness proof.
+  - `Error.lean` — Near-duplicate of `Main.lean` with four deliberate bugs, used to demonstrate counterexample discovery.
+  - `Tests.lean` — Property-based tests written with Plausible.
+  - `JqGenMain.lean` — Parses a jq string into a `JQuery` AST.
+  - `SqlGenMain.lean` — Renders an `SQuery` AST as an executable SQL string.
+- **`frontend/`** — Vite + React UI with query input and dual result panels.
+- **`backend/`** — FastAPI server bridging the LLM, Lean binaries, and UI.
+- **`setup.sh`** — One-shot installer; sets up backend, frontend, and opens the browser.
+- **`formalization.pdf`** — Companion document to the Lean proofs.
+- **`Dockerfile`** — Containerized build for reproducible deployment.
+
 ## Run
 
 ### Docker (one command, everything inside)
