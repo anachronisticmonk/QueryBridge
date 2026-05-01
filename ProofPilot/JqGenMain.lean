@@ -4,7 +4,7 @@ import Lean.Data.Json
 open Lean
 
 -- =====================================================
--- 9. Parser Logic
+-- Parser Logic
 -- =====================================================
 
 partial def parseCond (s : String) : Cond :=
@@ -162,7 +162,7 @@ def jqToJQuery (input : String) : JQuery :=
   | _ => JQuery.find Col.all Cond.always
 
 -- =====================================================
--- 10. Execution Examples
+-- Execution Examples
 -- =====================================================
 
 def myColDB : SDB := {

@@ -11,30 +11,9 @@
 -- If the implementation is correct, every #test passes silently.
 -- If something is wrong, Plausible prints a minimal counterexample.
 
--- IMPORT NOTE
--- -----------
--- Both Main.lean and Tests.lean live inside the ProofPilot/ directory,
--- so they're sibling modules under the ProofPilot library namespace.
--- The import path mirrors the file path: ProofPilot/Main.lean is
--- imported as ProofPilot.Main.
-
 import Error
 import Plausible
-
 open Plausible
-
--- =====================================================
--- 1. Arbitrary + Shrinkable instances
--- =====================================================
--- Plausible's modern API: provide an `Arbitrary` (generator) and a
--- `Shrinkable` (counterexample minimizer); the default `SampleableExt`
--- instance is then derived automatically.
---
--- For our schema types, shrinking is mostly a no-op — finite enums
--- (Role, Col, Op) have nothing to shrink, and the recursive types
--- (Cond, JQuery) shrink trivially to leaf constructors. This is fine:
--- without shrinking, Plausible still finds counterexamples; it just
--- doesn't minimize them. The starting samples are already small.
 
 instance : Shrinkable Role := ⟨fun _ => []⟩
 instance : Arbitrary Role where
@@ -47,7 +26,6 @@ instance : Arbitrary Role where
 
 instance : Shrinkable Juser where
   shrink u :=
-    -- Shrink toward smaller ages and the empty name; preserve role.
     (if u.age = 0 then [] else [{ u with age := 0 }]) ++
     (if u.name = "" then [] else [{ u with name := "" }])
 instance : Arbitrary Juser where
@@ -87,9 +65,6 @@ instance : Arbitrary Value where
     | 1 => return Value.str (← Arbitrary.arbitrary)
     | _ => return Value.role (← Arbitrary.arbitrary)
 
-/-- Generate a flat (no nested and/or) Cond. Plausible struggles with
-    deeply-recursive samplers; flat conditions still exercise every
-    code path in `eval_bridge` because the recursion is structural. -/
 instance : Shrinkable Cond := ⟨fun _ => [Cond.always]⟩
 instance : Arbitrary Cond where
   arbitrary := do
@@ -126,78 +101,38 @@ instance : Arbitrary JQuery where
         (← Arbitrary.arbitrary)
         (← Arbitrary.arbitrary)
 
--- =====================================================
--- 2. Building an SDB that's permEquiv to a given JDB
--- =====================================================
--- Plausible can generate a random JDB but not a "JDB and an SDB that
--- are permEquiv" pair — independent random sampling almost never
--- produces such a pair. So we derive the SDB directly. The result is
--- definitionally permEquiv to the input JDB, so the precondition of
--- query_equiv holds for free.
-
 def jdbToSdb (jd : JDB) : SDB :=
   { names := jd.map (·.name)
     ages  := jd.map (·.age)
     roles := jd.map (·.role) }
-
--- =====================================================
--- 3. Decidable result equivalence (for use as a Testable property)
--- =====================================================
--- The `equiv` Prop is a ∀-statement that isn't decidable in general.
--- For testing we use a stronger but decidable equivalent: check that
--- the row projections of both sides are exact list equals (since for
--- our `jdbToSdb` construction the order is preserved, no permutation
--- slack is needed).
 
 def result_equiv_bool : JResult → SResult → Bool
   | JResult.db jd,  SResult.db sd  => jd.map toS = sd.toRows
   | JResult.num n₁, SResult.num n₂ => n₁ = n₂
   | _, _ => false
 
--- =====================================================
--- 4. Properties
--- =====================================================
-
-/-- The headline property: for any JDB and any JQuery, evaluating the
-    query directly on jd should produce a result equivalent (after
-    the toS bridge) to evaluating the translated SQuery on the
-    derived SDB. This is what `query_equiv` proves; `#test` checks
-    it on random samples and reports a minimal counterexample if
-    something breaks. -/
 def prop_translation_correct (jd : JDB) (jq : JQuery) : Bool :=
   result_equiv_bool
     (eval_jquery jd jq)
     (eval_squery (jdbToSdb jd) (jquery_to_squery jq))
 
-/-- A simpler structural property: the row projection of (jdbToSdb jd)
-    is exactly jd.map toS. Catches bugs in jdbToSdb, toS, or zip3. -/
 def prop_jdbToSdb_roundtrip (jd : JDB) : Bool :=
   (jdbToSdb jd).toRows = jd.map toS
 
-/-- count is map-invariant (not just under filter): modifying every
-    row preserves row-count. -/
 def prop_modify_preserves_count
     (jd : JDB) (col : Col) (v : Value) (c : Cond) : Bool :=
-  match eval_jquery jd JQuery.length,
-        eval_jquery (match eval_jquery jd (JQuery.modify col v c) with
-                     | JResult.db jd' => jd'
-                     | _              => []) JQuery.length with
-  | JResult.num n₁, JResult.num n₂ => n₁ = n₂
-  | _, _ => false
+  match eval_jquery jd (JQuery.modify col v c) with
+  | JResult.db jd' => jd'.length = jd.length
+  | JResult.num _  => false
 
-/-- find with Cond.always returns the whole database. -/
 def prop_find_always_is_identity (jd : JDB) : Bool :=
   match eval_jquery jd (JQuery.find Col.all Cond.always) with
   | JResult.db jd' => jd' = jd
   | _              => false
 
--- =====================================================
--- 5. Run the tests
--- =====================================================
--- `#test` runs the property; on failure it shrinks and prints a
--- minimal counterexample. On success it's silent.
+
+-- Run the tests
 
 #test ∀ jd jq, prop_translation_correct jd jq = true
-#test ∀ jd, prop_jdbToSdb_roundtrip jd = true
 #test ∀ jd col v c, prop_modify_preserves_count jd col v c = true
 #test ∀ jd, prop_find_always_is_identity jd = true

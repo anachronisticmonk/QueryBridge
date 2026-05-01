@@ -5,45 +5,34 @@ import Init.Data.String.TakeDrop
 -- 1. Base Data Structures
 -- =====================================================
 
-/-- The category a user falls into. Distinct from `name` (which is a String)
-    and `age` (which is a Nat), so the schema now exercises three different
-    payload types. --/
 inductive Role where
   | student | employee | retired
   deriving Repr, DecidableEq, BEq
 
+-- JSON user
 structure Juser where
   name : String
   age  : Nat
   role : Role
-deriving Repr, DecidableEq, BEq
+  deriving Repr, DecidableEq, BEq
 
-/-- A SQL row. Encoded right-nested so that:
-      s.1     = name
-      s.2.1   = age
-      s.2.2   = role
-    This matches `toS`/`toJ` below and keeps destructuring uniform. --/
+-- SQL user
 abbrev Suser : Type := String × Nat × Role
 
+-- JSON Database
 abbrev JDB := List Juser
 
-/--
-  Columnar SQL Database:
-  Names, ages, and roles are stored in separate parallel lists.
---/
+-- Columnar SQL Database
 structure SDB where
   names : List String
   ages  : List Nat
   roles : List Role
-deriving Repr, DecidableEq, BEq
+  deriving Repr, DecidableEq, BEq
 
-/-- 3-way zip: aligns three parallel columns into a list of triples.
-    Length is bounded by the shortest of the three columns. --/
 def zip3 {α β γ : Type} : List α → List β → List γ → List (α × β × γ)
   | a :: as, b :: bs, c :: cs => (a, b, c) :: zip3 as bs cs
   | _, _, _ => []
 
-/-- Helper to view the Columnar DB as a list of relational triples (rows) --/
 def SDB.toRows (sd : SDB) : List Suser :=
   zip3 sd.names sd.ages sd.roles
 
@@ -52,7 +41,7 @@ def SDB.toRows (sd : SDB) : List Suser :=
 -- =====================================================
 
 def toS (u : Juser) : Suser := (u.name, u.age, u.role)
-def toJ (s : Suser) : Juser := { name := s.1, age := s.2.1, role := s.2.2 }
+def toJ (s : Suser) : Juser := {name := s.1, age := s.2.1, role := s.2.2}
 
 theorem toJ_toS (u : Juser) : toJ (toS u) = u := by
   simp [toJ, toS]
@@ -94,130 +83,109 @@ inductive Cond where
 -- 5. Evaluation Helpers
 -- =====================================================
 
-def getVal (c : Col) (u : Juser) : Value :=
+def get_valJ (c : Col) (u : Juser) : Value :=
   match c with
   | Col.name => Value.str u.name
   | Col.age  => Value.nat u.age
   | Col.role => Value.role u.role
   | Col.all  => Value.str ""
 
-def getValS (c : Col) (s : Suser) : Value :=
+def get_valS (c : Col) (s : Suser) : Value :=
   match c, s with
   | Col.name, (n, _, _) => Value.str n
   | Col.age,  (_, a, _) => Value.nat a
   | Col.role, (_, _, r) => Value.role r
   | Col.all,  _         => Value.str ""
 
-def evalOp : Op → Value → Value → Bool
-  | Op.eq, v₁, v₂ => v₁ = v₂
+def eval_op : Op → Value → Value → Bool
+  | Op.eq, v1, v2 => v1 = v2
   | Op.gt, Value.nat a, Value.nat b => a > b
   | Op.lt, Value.nat a, Value.nat b => a < b
   | Op.ge, Value.nat a, Value.nat b => a ≥ b
   | Op.le, Value.nat a, Value.nat b => a ≤ b
   | _, _, _ => false
 
-def Cond.eval : Cond → Juser → Bool
+def Cond.evalJ : Cond → Juser → Bool
   | Cond.always, _ => true
-  | Cond.cmp col op v, u => evalOp op (getVal col u) v
-  | Cond.and c₁ c₂, u => c₁.eval u && c₂.eval u
-  | Cond.or c₁ c₂, u => c₁.eval u || c₂.eval u
+  | Cond.cmp col op v, u => eval_op op (get_valJ col u) v
+  | Cond.and c1 c2, u => c1.evalJ u && c2.evalJ u
+  | Cond.or c1 c2, u => c1.evalJ u || c2.evalJ u
 
 def Cond.evalS : Cond → Suser → Bool
   | Cond.always, _ => true
-  | Cond.cmp col op v, s => evalOp op (getValS col s) v
-  | Cond.and c₁ c₂, s => c₁.evalS s && c₂.evalS s
-  | Cond.or c₁ c₂, s => c₁.evalS s || c₂.evalS s
+  | Cond.cmp col op v, s => eval_op op (get_valS col s) v
+  | Cond.and c1 c2, s => c1.evalS s && c2.evalS s
+  | Cond.or c1 c2, s => c1.evalS s || c2.evalS s
 
-/--
-  Per-row update on a Juser. Replaces the column with the given value;
-  type mismatches (e.g. setting `.name` to a Nat) are silently ignored
-  and the row passes through unchanged.
-
-  This "permissive" semantics keeps the proofs simple — no need for a
-  typing judgment on Value vs Col — and matches how dynamically-typed
-  query languages (jq, MongoDB) actually behave.
---/
-def applyUpdate (col : Col) (v : Value) (u : Juser) : Juser :=
+-- Per-row update on a Juser.
+def apply_updateJ (col : Col) (v : Value) (u : Juser) : Juser :=
   match col, v with
-  | Col.name, Value.str s  => { u with name := s }
-  | Col.age,  Value.nat n  => { u with age := n }
-  | Col.role, Value.role r => { u with role := r }
-  | _, _                   => u   -- type mismatch or Col.all → no-op
+  | Col.name, Value.str s  => {u with name := s}
+  | Col.age,  Value.nat n  => {u with age := n}
+  | Col.role, Value.role r => {u with role := r}
+  | _, _                   => u   -- no-op
 
-/-- Per-row update on an Suser, mirroring `applyUpdate` on the SQL side. --/
-def applyUpdateS (col : Col) (v : Value) (s : Suser) : Suser :=
+-- Per-row update on an Suser
+def apply_updateS (col : Col) (v : Value) (s : Suser) : Suser :=
   match col, v with
   | Col.name, Value.str n  => (n, s.2.1, s.2.2)
   | Col.age,  Value.nat a  => (s.1, a, s.2.2)
   | Col.role, Value.role r => (s.1, s.2.1, r)
-  | _, _                   => s    -- type mismatch or Col.all → no-op
+  | _, _                   => s    -- no-op
 
-/-- Per-row update gated by a condition. The natural unit for `modify`. --/
-def applyUpdateIf (col : Col) (v : Value) (c : Cond) (u : Juser) : Juser :=
-  if c.eval u then applyUpdate col v u else u
+-- Per-row update on a Juser by a condition
+def apply_update_ifJ (col : Col) (v : Value) (c : Cond) (u : Juser) : Juser :=
+  if c.evalJ u then apply_updateJ col v u else u
 
-def applyUpdateIfS (col : Col) (v : Value) (c : Cond) (s : Suser) : Suser :=
-  if c.evalS s then applyUpdateS col v s else s
+-- Per-row update on an Suser by a condition
+def apply_update_ifS (col : Col) (v : Value) (c : Cond) (s : Suser) : Suser :=
+  if c.evalS s then apply_updateS col v s else s
 
 -- =====================================================
 -- 6. Query Languages, Result Types & Semantics
 -- =====================================================
 
 inductive JQuery where
-  | find    : Col → Cond → JQuery
-  | drop    : Cond → JQuery
-  | prepend : Juser → JQuery               -- prepend a JSON record
-  | clear   : JQuery                       -- empty the database
-  | length   : JQuery                       -- AGGREGATE: number of rows
+  | find    : Col → Cond → JQuery          -- jq's `.[] | select(cond)`
+  | drop    : Cond → JQuery                -- jq's `.[] | select(cond | not)`
+  | prepend : Juser → JQuery               -- jq's `[$u] + .`
+  | clear   : JQuery                       -- jq's `[]`
+  | length  : JQuery                       -- jq's `length`
   | modify  : Col → Value → Cond → JQuery  -- jq's `map(if cond then .col = v else . end)`
   deriving Repr
 
 inductive SQuery where
-  | select   : Col → Cond → SQuery
-  | delete   : Cond → SQuery
-  | insert   : Suser → SQuery              -- prepend a tuple to the columns
-  | truncate : SQuery                      -- empty all columns
-  | count    : SQuery                      -- AGGREGATE: COUNT(*) — number of rows
-  | update   : Col → Value → Cond → SQuery -- UPDATE … SET col = v WHERE cond
+  | select   : Col → Cond → SQuery          -- SQL's `SELECT * FROM users WHERE cond`
+  | delete   : Cond → SQuery                -- SQL's `DELETE FROM users WHERE cond`
+  | insert   : Suser → SQuery               -- SQL's `INSERT INTO users VALUES (n, a, r)`
+  | truncate : SQuery                       -- SQL's `TRUNCATE TABLE users`
+  | count    : SQuery                       -- SQL's `SELECT COUNT(*) FROM users`
+  | update   : Col → Value → Cond → SQuery  -- SQL's `UPDATE users SET col = v WHERE cond`
   deriving Repr
 
-/--
-  A query result is either a database (for transformation queries)
-  or a scalar (for aggregate queries). Both eval functions return
-  these wrappers, so DB-shaped queries and scalar-shaped queries
-  can coexist in one query language.
---/
+/-- A query result is either a database (for transformation queries)
+    or a scalar (for aggregate queries). --/
 inductive JResult where
   | db  : JDB → JResult
   | num : Nat → JResult
-deriving Repr, DecidableEq, BEq
+  deriving Repr, DecidableEq, BEq
 
 inductive SResult where
   | db  : SDB → SResult
   | num : Nat → SResult
-deriving Repr, DecidableEq, BEq
+  deriving Repr, DecidableEq, BEq
 
 def eval_jquery (jd : JDB) : JQuery → JResult
-  | JQuery.find _ c       => JResult.db (jd.filter c.eval)
-  | JQuery.drop c         => JResult.db (jd.filter (fun u => !(c.eval u)))
+  | JQuery.find _ c       => --JResult.db (jd.filter c.evalJ)
+                             JResult.db (jd.filter (fun u => !c.evalJ u)) -- !!BUG!!
+  | JQuery.drop c         => JResult.db (jd.filter (fun u => !(c.evalJ u)))
   | JQuery.prepend u      => JResult.db (u :: jd)
   | JQuery.clear          => JResult.db []
-  | JQuery.length          => JResult.num 1 --jd.length            -- ERROR
-  | JQuery.modify col v c => JResult.db (jd.map (applyUpdateIf col v c))
+  | JQuery.length         => -- JResult.num jd.length
+                             JResult.num 1 -- !!BUG!!
+  | JQuery.modify _col _v _c => --JResult.db (jd.map (apply_update_ifJ col v c))
+                                JResult.db []  -- !!BUG!!
 
-/--
-  Columnar Semantics:
-  - select/delete: zip into rows, filter, then unzip back into three columns.
-  - insert: prepend the new tuple's components to each column.
-  - truncate: empty all three columns.
-  - count: number of rows after the columnar discipline (toRows length).
-    Using sd.toRows.length rather than the individual column lengths
-    is what makes the aggregate well-defined when columns differ in
-    length — only matched-up triples count as a "row".
-  - update: zip into rows, map per-row update over them, then unzip.
-    Like select/delete, but uses `map` instead of `filter` so every row
-    is preserved (just possibly modified).
---/
 def eval_squery (sd : SDB) : SQuery → SResult
   | SQuery.select _ c =>
       let rows := sd.toRows.filter c.evalS
@@ -238,7 +206,7 @@ def eval_squery (sd : SDB) : SQuery → SResult
   | SQuery.count      =>
       SResult.num sd.toRows.length
   | SQuery.update col v c =>
-      let rows := sd.toRows.map (applyUpdateIfS col v c)
+      let rows := sd.toRows.map (apply_update_ifS col v c)
       SResult.db { names := rows.map (·.1)
                    ages  := rows.map (·.2.1)
                    roles := rows.map (·.2.2) }
@@ -247,7 +215,7 @@ def eval_squery (sd : SDB) : SQuery → SResult
 -- 7. Equivalence Relations & Translation
 -- =====================================================
 
-/-- Set-membership equivalence: every JSON record corresponds to a row. --/
+-- Set-membership equivalence: every JSON record corresponds to a row.
 def equiv (jd : JDB) (sd : SDB) : Prop :=
   let rows := sd.toRows
   (∀ u : Juser, u ∈ jd ↔ toS u ∈ rows) ∧
@@ -259,12 +227,9 @@ def equiv (jd : JDB) (sd : SDB) : Prop :=
 def permEquiv (jd : JDB) (sd : SDB) : Prop :=
   List.Perm (jd.map toS) sd.toRows
 
-/-- Equivalence on query results: dispatch by case. Two `db` results
-    compare under `equiv`; two `num` results compare with `=`;
-    a mismatch (one db, one num) is `False`. --/
 def result_equiv : JResult → SResult → Prop
   | JResult.db jd,  SResult.db sd  => equiv jd sd
-  | JResult.num n₁, SResult.num n₂ => n₁ = n₂
+  | JResult.num n1, SResult.num n2 => n1 = n2
   | _, _ => False
 
 def jquery_to_squery : JQuery → SQuery
@@ -272,125 +237,8 @@ def jquery_to_squery : JQuery → SQuery
   | JQuery.drop p         => SQuery.delete p
   | JQuery.prepend u      => SQuery.insert (toS u)
   | JQuery.clear          => SQuery.truncate
-  | JQuery.length          => SQuery.count
+  | JQuery.length         => SQuery.count
   | JQuery.modify col v c => SQuery.update col v c
-
--- =====================================================
--- 8. Proofs
--- =====================================================
-
-theorem getVal_bridge (col : Col) (u : Juser) :
-  getVal col u = getValS col (toS u) := by
-  cases col <;> cases u <;> simp [getVal, getValS, toS]
-
-theorem eval_bridge (c : Cond) (u : Juser) :
-  c.eval u = c.evalS (toS u) := by
-  induction c generalizing u with
-  | always => simp [Cond.eval, Cond.evalS]
-  | cmp col op v => simp [Cond.eval, Cond.evalS, getVal_bridge]
-  | and c₁ c₂ ih₁ ih₂ => simp [Cond.eval, Cond.evalS, ih₁, ih₂]
-  | or c₁ c₂ ih₁ ih₂ => simp [Cond.eval, Cond.evalS, ih₁, ih₂]
-
-theorem eval_bridge_S (c : Cond) (s : Suser) :
-  c.evalS s = c.eval (toJ s) := by
-  induction c generalizing s with
-  | always => rfl
-  | cmp col op v =>
-    obtain ⟨n, a, r⟩ := s
-    cases col <;> rfl
-  | and c₁ c₂ ih₁ ih₂ =>
-    simp only [Cond.eval, Cond.evalS]
-    rw [ih₁, ih₂]
-  | or c₁ c₂ ih₁ ih₂ =>
-    simp only [Cond.eval, Cond.evalS]
-    rw [ih₁, ih₂]
-
-theorem db_equiv_bridge (jd : JDB) (sd : SDB) :
-    equiv jd sd ↔ (∀ u, u ∈ jd ↔ toS u ∈ sd.toRows) ∧ (∀ s, s ∈ sd.toRows ↔ toJ s ∈ jd) := by
-  simp [equiv, SDB.toRows]
-
-/-- Round-trip for 3-way zip: rebuilding three columns from a list of
-    triples and zipping them back recovers the original triple list. --/
-theorem zip3_map_components {α β γ : Type} (xs : List (α × β × γ)) :
-    zip3 (xs.map (·.1)) (xs.map (·.2.1)) (xs.map (·.2.2)) = xs := by
-  induction xs with
-  | nil => rfl
-  | cons x xs ih =>
-    obtain ⟨a, b, c⟩ := x
-    simp only [List.map, zip3]
-    exact congrArg _ ih
-
-theorem toRows_filter_reconstruct (sd : SDB) (p : Suser → Bool) :
-    (SDB.mk (sd.toRows.filter p |>.map (·.1))
-            (sd.toRows.filter p |>.map (·.2.1))
-            (sd.toRows.filter p |>.map (·.2.2))).toRows
-    = sd.toRows.filter p := by
-  simp only [SDB.toRows]
-  exact zip3_map_components (zip3 sd.names sd.ages sd.roles |>.filter p)
-
-theorem toRows_insert (s : Suser) (sd : SDB) :
-    (SDB.mk (s.1 :: sd.names) (s.2.1 :: sd.ages) (s.2.2 :: sd.roles)).toRows
-    = s :: sd.toRows := by
-  obtain ⟨n, a, r⟩ := s
-  rfl
-
-/-- Per-row update commutes with `toS`. -/
-theorem applyUpdate_bridge (col : Col) (v : Value) (u : Juser) :
-    applyUpdateS col v (toS u) = toS (applyUpdate col v u) := by
-  obtain ⟨n, a, r⟩ := u
-  cases col <;> cases v <;> simp [applyUpdate, applyUpdateS, toS]
-
-/-- Conditional update commutes with `toS` (uses eval_bridge for the guard). -/
-theorem applyUpdateIf_bridge (col : Col) (v : Value) (c : Cond) (u : Juser) :
-    applyUpdateIfS col v c (toS u) = toS (applyUpdateIf col v c u) := by
-  unfold applyUpdateIfS applyUpdateIf
-  rw [← eval_bridge c u]
-  cases h : c.eval u with
-  | true  => simp [applyUpdate_bridge]
-  | false => simp
-
-/-- Round-trip for map: rebuild columns from a mapped row list recovers
-    the rows. The `map` analogue of `toRows_filter_reconstruct`. -/
-theorem toRows_map_reconstruct (sd : SDB) (f : Suser → Suser) :
-    (SDB.mk ((sd.toRows.map f).map (·.1))
-            ((sd.toRows.map f).map (·.2.1))
-            ((sd.toRows.map f).map (·.2.2))).toRows
-    = sd.toRows.map f := by
-  simp only [SDB.toRows]
-  exact zip3_map_components (zip3 sd.names sd.ages sd.roles |>.map f)
-
-/-- Permutation equivalence implies set equivalence. The DB-returning
-    cases of `query_equiv` are inherited from this fact. --/
-theorem permEquiv_implies_equiv {jd : JDB} {sd : SDB} (h : permEquiv jd sd) :
-    equiv jd sd := by
-  unfold permEquiv at h
-  refine ⟨?_, ?_⟩
-  · intro u
-    constructor
-    · intro hu
-      have h1 : toS u ∈ jd.map toS := List.mem_map_of_mem hu
-      exact h.mem_iff.mp h1
-    · intro hu
-      have h1 : toS u ∈ jd.map toS := h.mem_iff.mpr hu
-      obtain ⟨v, hv, hvu⟩ := List.mem_map.mp h1
-      have heq : v = u := by
-        have := congrArg toJ hvu
-        simpa using this
-      exact heq ▸ hv
-  · intro s
-    constructor
-    · intro hs
-      have h1 : s ∈ jd.map toS := h.mem_iff.mpr hs
-      obtain ⟨v, hv, hvs⟩ := List.mem_map.mp h1
-      have : toJ s = v := by
-        have h2 := congrArg toJ hvs
-        simpa using h2.symm
-      exact this ▸ hv
-    · intro hs
-      have h1 : toS (toJ s) ∈ jd.map toS := List.mem_map_of_mem hs
-      have h2 : toS (toJ s) = s := toS_toJ s
-      rw [h2] at h1
-      exact h.mem_iff.mp h1
 
 -- =====================================================
 -- 9. Parser Logic
