@@ -118,7 +118,6 @@ root (QueryBridge)
   - app
   - proof_pilot
   - README
-  - CLAUDE.md
   -
 
 
