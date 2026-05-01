@@ -1,14 +1,41 @@
-name: Lean Action CI
+name: Lean CI
 
 on:
   push:
   pull_request:
   workflow_dispatch:
 
+# Cancel any in-flight run for the same ref when a new push lands.
+concurrency:
+  group: lean-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v5
+
       - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: ProofPilot
+          # Skip the implicit `lake build` so we can pick targets explicitly.
+          # The default would also build Test.lean, which intentionally fails
+          # because Plausible discovers the count counter-example in Error.lean.
+          build: false
+
+      - name: Fetch Mathlib build cache
+        working-directory: ProofPilot
+        run: lake exe cache get || true
+
+      - name: Build the executables
+        working-directory: ProofPilot
+        run: lake build sqlGenMain sqlGenError sqlGenBug2 sqlGenBug3
+
+      - name: Smoke-test each binary
+        working-directory: ProofPilot
+        run: |
+          ./.lake/build/bin/sqlGenMain '.[]'
+          ./.lake/build/bin/sqlGenError 'length'
+          ./.lake/build/bin/sqlGenBug2 '.[] | delete(.age > 30)'
+          ./.lake/build/bin/sqlGenBug3 '.[] | update(.age, 50, .name == "Alice")'

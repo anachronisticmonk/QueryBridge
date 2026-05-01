@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -90,3 +93,12 @@ def counterexamples():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+# In production (Docker) the React SPA is built into ../frontend/dist and
+# served by FastAPI at "/" so the whole stack runs on a single port. In
+# development the file doesn't exist; Vite serves the SPA on 5173 and
+# proxies /api/* to this server, so the mount is a no-op.
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")

@@ -42,7 +42,19 @@ Operators: `==`, `>`, `>=`, `<`, `<=`.
 
 ## Run
 
-### Lean binaries (one-time, ~30s on warm cache)
+### Docker (one command, everything inside)
+
+```bash
+docker build -t querybridge .
+docker run --rm -p 8000:8000 querybridge
+# open http://localhost:8000
+```
+
+The image is multi-stage: it builds the React bundle, fetches Mathlib's prebuilt oleans and compiles the four Lean executables, then assembles a slim Python runtime that serves the API and the SPA on a single port. Set `ANTHROPIC_API_KEY` via `-e` to use the real LLM in place of the mock.
+
+### Local — three steps
+
+#### Lean binaries (one-time, ~30s on warm cache)
 ```bash
 cd ProofPilot
 lake update                              # one-time Mathlib fetch
@@ -52,14 +64,14 @@ Pass the explicit targets — a bare `lake build` pulls in `Test.lean`, which in
 
 If the binaries aren't built the rest of the app still works; the Lean-derived SQL box just shows a build hint instead.
 
-### Backend
+#### Backend
 ```bash
 cd backend
 pip install -r requirements.txt
 uvicorn main:app --port 8000 --reload
 ```
 
-### Frontend (separate terminal)
+#### Frontend (separate terminal)
 ```bash
 cd frontend
 npm install
