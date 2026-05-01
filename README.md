@@ -9,10 +9,13 @@ QueryBridge allows users to write queries in plain English. A model converts it 
 The core goal of the project is **correctness**. We use **Lean 4** to formally verify that the generated SQL query has the same meaning as the original jq.
 
 To achieve this, we:
-- Model JSON and SQL databases as separate data structures  
+- Model JSON and SQL databases as separate data structures
+    - JDB is the usual list of JSON records, each holding a complete user.
+    - SDB uses a columnar format, separate lists per field for efficient column-wise scans and aggregates.
 - Define when these databases are **equivalent**  
 - Design small query languages for jq and SQL  
 - Implement a translation from jq queries to SQL  
+- Use **Plausible** for property-based testing — when a property cannot be proven, Plausible automatically searches for a counterexample that exposes the bug.
 
 ### Key Result
 
@@ -20,11 +23,14 @@ If the JSON and SQL databases start out equivalent, then running a jq query on t
 
 ## How the proof reaches the running app
 
-The Lean proof isn't a side document — the backend actually executes it. A small Lean binary (`sqlGenMain`) parses the jq string into the verified `JQuery` AST, applies the proven `jquery_to_squery` to get an `SQuery` value, and templatizes that value into an executable SQL string. The result shows up in the UI as **"SQL (Lean-derived)"** alongside the unverified `translator.py` output. Both queries run on identical seed data; the proof rules out any case where the two result panels could disagree.
+The Lean proof isn't a side document — the backend actually executes it. A small Lean binary (`jqGenMain`) parses the jq string into the verified `JQuery` AST. The proven-correct `jquery_to_squery` then converts the `JQuery` into an `SQuery`, and a second binary (`sqlGenMain`) templatizes that `SQuery` value into an executable SQL string. The result shows up in the UI as **"SQL (Lean-derived)"** alongside the unverified `translator.py` output. Both queries run on identical seed data; the proof rules out any case where the two result panels could disagree. For example, the end-to-end flow is shown in the GUI screenshot below.
+![QueryBridge UI](figures/endtoend.png)
 
-### Counter-example demo
+### Counter-example generation using Plausible
 
-`ProofPilot/Error.lean` is a near-duplicate of `Main.lean` with one deliberate bug: `eval_jquery JQuery.count` returns `1` instead of the actual length. Toggle **"Use buggy variant (Error.lean)"** in the UI and ask *"how many users"* — the buggy jq evaluator returns `count:1` while the correct SQL evaluator returns `count:7`. The divergence renders as a red counter-example panel: the precise input the equivalence proof refuses to type-check against.
+We use Plausible to write property-based tests that automatically search for counterexamples. To showcase this, `ProofPilot/Error.lean` is a near-duplicate of `Main.lean` seeded with four deliberate bugs — for instance, `eval_jquery JQuery.modify` always returns `[]` regardless of the database. The `prop_modify_preserves_count` test in `Tests.lean` checks that a `modify` query never changes the row count (since modify only rewrites fields, never adds or removes users). Plausible fails to prove this property and generates a counterexample like the one below: a database with a single user where, due to the bug, the length after `modify` is `0` instead of `1`. 
+![QueryBridge UI](figures/plausible.png)
+
 
 ## Supported Queries
 
@@ -32,7 +38,7 @@ The Lean proof isn't a side document — the backend actually executes it. A sma
 - `SELECT * WHERE …` — `.[] | select(.field op value)`
 - `SELECT col FROM … WHERE …` — `.[] | select(.field op value) | .col`
 - `DELETE WHERE …` — `del(.[] | select(.field op value))`
-- `SELECT COUNT(*)` — `length`
+- `COUNT(*)` — `length`
 - `INSERT INTO … VALUES …` — `.[] | insert("name", age, "role")`
 - `UPDATE … SET col = v WHERE …` — `.[] | update(.col, value, <predicate>)`
 
@@ -53,6 +59,14 @@ docker run --rm -p 8000:8000 querybridge
 The image is multi-stage: it builds the React bundle, fetches Mathlib's prebuilt oleans and compiles the four Lean executables, then assembles a slim Python runtime that serves the API and the SPA on a single port. Set `ANTHROPIC_API_KEY` via `-e` to use the real LLM in place of the mock.
 
 ### Local — three steps
+
+We provide a `setup.sh` script that automates the entire flow — installing the backend dependencies, starting the backend, installing the frontend dependencies, launching the dev server, and opening the QueryBridge UI in your browser:
+
+```bash
+./setup.sh
+```
+
+If you'd rather run the steps manually, follow the three sections below.
 
 #### Lean binaries (one-time, ~30s on warm cache)
 ```bash

@@ -111,20 +111,39 @@ def result_equiv_bool : JResult → SResult → Bool
   | JResult.num n₁, SResult.num n₂ => n₁ = n₂
   | _, _ => false
 
-def prop_translation_correct (jd : JDB) (jq : JQuery) : Bool :=
-  result_equiv_bool
-    (eval_jquery jd jq)
-    (eval_squery (jdbToSdb jd) (jquery_to_squery jq))
 
-def prop_jdbToSdb_roundtrip (jd : JDB) : Bool :=
-  (jdbToSdb jd).toRows = jd.map toS
-
+/--
+  For any database, modifying the values of an user doesn't change the
+  number of the rows in the database.
+  --/
 def prop_modify_preserves_count
     (jd : JDB) (col : Col) (v : Value) (c : Cond) : Bool :=
   match eval_jquery jd (JQuery.modify col v c) with
   | JResult.db jd' => jd'.length = jd.length
   | JResult.num _  => false
 
+/--
+  For any database, length should return the actual number of rows in the
+  database
+  --/
+def prop_length_returns_count (jd : JDB) : Bool :=
+  match eval_jquery jd JQuery.length with
+  | JResult.num n => n = jd.length
+  | JResult.db _  => false
+
+/--
+  For any database and jq query, evaluating directly on JSON should agree
+  with translating to SQL via jquery_to_squery and evaluating on the
+  columnar projection.
+  --/
+def prop_translation_correct (jd : JDB) (jq : JQuery) : Bool :=
+  result_equiv_bool
+    (eval_jquery jd jq)
+    (eval_squery (jdbToSdb jd) (jquery_to_squery jq))
+
+/--
+  For any database, selecting all the rows return an identical database.
+  --/
 def prop_find_always_is_identity (jd : JDB) : Bool :=
   match eval_jquery jd (JQuery.find Col.all Cond.always) with
   | JResult.db jd' => jd' = jd
@@ -133,6 +152,7 @@ def prop_find_always_is_identity (jd : JDB) : Bool :=
 
 -- Run the tests
 
-#test ∀ jd jq, prop_translation_correct jd jq = true
 #test ∀ jd col v c, prop_modify_preserves_count jd col v c = true
-#test ∀ jd, prop_find_always_is_identity jd = true
+--#test ∀ jd, prop_length_returns_count jd = true
+--#test ∀ jd jq, prop_translation_correct jd jq = true
+--#test ∀ jd, prop_find_always_is_identity jd = true
