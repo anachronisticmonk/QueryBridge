@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="figures/querybridge-logo.png" alt="QueryBridge logo" width="220">
+</p>
+
 # QueryBridge
 
 **Verified jq → SQL translation, kernel-checked in Lean 4.**
