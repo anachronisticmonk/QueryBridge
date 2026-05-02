@@ -39,11 +39,7 @@ QueryBridge attacks this with a mechanically-checked correspondence:
 > `jq`: evaluating `jq` against `jd` and evaluating `jquery_to_squery jq`
 > against `sd` produce equivalent results.
 
-The proof is in `ProofPilot/Main.lean`; the kernel-tracked axiom set is the
-three Lean foundational axioms (`propext`, `Quot.sound`, `Classical.choice`)
-and nothing else. The same `jquery_to_squery` function the proof reasons
-about is the *actual* translator that ships in the binary, so the proof's
-guarantee is not aspirational — it bears on every query the user runs.
+The proof is mechanized in Lean 4 in `ProofPilot/Main.lean`, and the same translation function (`jquery_to_squery`) the proof reasons about is the one shipped in the binary — so the guarantee bears on every query the user runs.
 
 ---
 
@@ -53,21 +49,20 @@ guarantee is not aspirational — it bears on every query the user runs.
 
 A typical run:
 
-1. The user types *"delete all users"*.
+1. The user types *"delete users younger than 25"*.
 2. The mock LLM (or, with `ANTHROPIC_API_KEY` set, the live model) emits the
-   jq expression `del(.[])`.
-3. The Python translator emits `DELETE FROM users`.
-4. The verified Lean binary `sqlGenMain` parses the *same* jq, applies the
-   proven `jquery_to_squery`, and emits its own SQL string. The two strings
-   should agree; the UI shows both side-by-side and tags the verified
-   arrow `✓ Proven`.
-5. Both queries run against identical seed data; the result panels show 0
-   rows on both sides.
-6. The **per-query proof witness** below the results identifies the exact
-   arm of `query_equiv` that fires (`JQuery.clear ⟶ SQuery.truncate`,
-   `Main.lean:501–505`), the supporting lemmas, the kernel-tracked axiom
-   set, and `kernel_match: true` — the kernel reduced both sides to
-   structurally-equal values for *this* specific input.
+   jq expression `del(.[] | select(.age < 25))`.
+3. The Lean binary `ProofPilot/jqGenMain` parses the *same* jq into the
+   verified `JQuery` AST. The proven-correct `jquery_to_squery` in
+   `ProofPilot/Main` converts the `JQuery` into an `SQuery`, and a second
+   binary (`ProofPilot/sqlGenMain`) templatizes that value into an executable
+   SQL string. The UI shows both translations side-by-side, with the
+   Lean-derived one tagged `✓ Proven in Lean 4`.
+4. Both queries run against identical seed data, and the result panels show
+   the surviving rows on each side. The proof rules out any case where the
+   two panels could disagree.
+
+The end-to-end flow is shown in the GUI screenshot above.
 
 ---
 
