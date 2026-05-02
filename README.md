@@ -330,59 +330,17 @@ QueryBridge/
 
 ## Build & run
 
-### Docker (one command)
+### Docker
 
 ```bash
-docker build -t querybridge .
-docker run --rm -p 8000:8000 querybridge
+docker run --rm -p 8000:8000 durwasa/querybridge
 # open http://localhost:8000
 ```
 
-The image is multi-stage: it builds the React bundle, fetches Mathlib's
-prebuilt `.olean`s and compiles the Lean executables, then assembles a slim
-Python runtime that serves the API and the SPA on a single port. Pass
-`-e ANTHROPIC_API_KEY=…` to use the live LLM in place of the mock.
-
-#### Iterating on the source without rebuilding the image
-
-The slow part of `docker build` is the Lean compile. To edit Python or
-`Main.lean` and have the container pick up your changes on restart, mount
-the host files individually on top of the image:
-
-```bash
-docker run --rm -p 8000:8000 \
-  -v "$(pwd)/backend:/app/backend:ro" \
-  -v "$(pwd)/ProofPilot/Main.lean:/app/ProofPilot/Main.lean:ro" \
-  -v "$(pwd)/ProofPilot/proof_trace.json:/app/ProofPilot/proof_trace.json:ro" \
-  querybridge:latest
-```
-
-If your terminal mangles the trailing backslashes when you paste (zsh
-and some terminal emulators do), use the single-line form:
-
-```bash
-docker run --rm -p 8000:8000 -v "$(pwd)/backend:/app/backend:ro" -v "$(pwd)/ProofPilot/Main.lean:/app/ProofPilot/Main.lean:ro" -v "$(pwd)/ProofPilot/proof_trace.json:/app/ProofPilot/proof_trace.json:ro" querybridge:latest
-```
-
-To detach and name the container so you can `docker restart` it after
-edits, add `-d --name querybridge-dev` and drop `--rm`:
-
-```bash
-docker run -d --name querybridge-dev -p 8000:8000 -v "$(pwd)/backend:/app/backend:ro" -v "$(pwd)/ProofPilot/Main.lean:/app/ProofPilot/Main.lean:ro" -v "$(pwd)/ProofPilot/proof_trace.json:/app/ProofPilot/proof_trace.json:ro" querybridge:latest
-
-# After editing source on the host:
-docker restart querybridge-dev
-```
-
-**Don't mount the whole `ProofPilot/` directory.** That would overlay your
-host's `ProofPilot/.lake/build/bin/sqlGenMain` on top of the image's, and
-on macOS / non-Linux hosts those host binaries are the wrong architecture
-for the Linux container — every `/api/query` call will fail with
-`OSError: [Errno 8] Exec format error`. Mounting only the two text files
-the backend reads at runtime (`Main.lean` for per-query proof sources,
-`proof_trace.json` for `/api/proofs`) keeps the image's Linux Lean
-binaries intact. If you only need to iterate on Python, the first mount
-on its own is enough.
+Pulls a prebuilt multi-arch image from Docker Hub (linux/amd64 +
+linux/arm64). Pass `-e ANTHROPIC_API_KEY=…` to swap the mock LLM for
+the live one. To build locally instead of pulling, run
+`docker build -t querybridge . && docker run --rm -p 8000:8000 querybridge`.
 
 ### Local — three steps
 
