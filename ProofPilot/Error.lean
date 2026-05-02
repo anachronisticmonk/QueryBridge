@@ -212,21 +212,20 @@ def eval_squery (sd : SDB) : SQuery → SResult
                    roles := rows.map (·.2.2) }
 
 -- =====================================================
--- 7. Equivalence Relations & Translation
+-- 7. Equivalence Relation & Translation
 -- =====================================================
 
--- Set-membership equivalence: every JSON record corresponds to a row.
-def equiv (jd : JDB) (sd : SDB) : Prop :=
-  let rows := sd.toRows
-  (∀ u : Juser, u ∈ jd ↔ toS u ∈ rows) ∧
-  (∀ s : Suser, s ∈ rows ↔ toJ s ∈ jd)
-
-/-- Permutation equivalence: tracks element MULTIPLICITY, not just
-    membership. Strictly stronger than `equiv`. Required for any
+/-- Permutation equivalence between a JSON database and a columnar SQL
+    database: when each Juser is mapped to its tuple form, the resulting
+    list is a permutation of the SQL side's row projection. Tracks element
+    multiplicity (and not just membership), which is required for any
     aggregate that isn't set-functional (count, sum, average, …). --/
-def permEquiv (jd : JDB) (sd : SDB) : Prop :=
+def equiv (jd : JDB) (sd : SDB) : Prop :=
   List.Perm (jd.map toS) sd.toRows
 
+/-- Result-level lift of `equiv`: two query results are equivalent iff
+    they share a tag and their payloads agree (permutation on databases,
+    equality on scalars). --/
 def result_equiv : JResult → SResult → Prop
   | JResult.db jd,  SResult.db sd  => equiv jd sd
   | JResult.num n1, SResult.num n2 => n1 = n2

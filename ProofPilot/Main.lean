@@ -209,21 +209,20 @@ def eval_squery (sd : SDB) : SQuery → SResult
                    roles := rows.map (·.2.2) }
 
 -- =====================================================
--- 7. Equivalence Relations & Translation
+-- 7. Equivalence Relation & Translation
 -- =====================================================
 
--- Set-membership equivalence: every JSON record corresponds to a row.
-def equiv (jd : JDB) (sd : SDB) : Prop :=
-  let rows := sd.toRows
-  (∀ u : Juser, u ∈ jd ↔ toS u ∈ rows) ∧
-  (∀ s : Suser, s ∈ rows ↔ toJ s ∈ jd)
-
-/-- Permutation equivalence: tracks element MULTIPLICITY, not just
-    membership. Strictly stronger than `equiv`. Required for any
+/-- Permutation equivalence between a JSON database and a columnar SQL
+    database: when each Juser is mapped to its tuple form, the resulting
+    list is a permutation of the SQL side's row projection. Tracks element
+    multiplicity (and not just membership), which is required for any
     aggregate that isn't set-functional (count, sum, average, …). --/
-def permEquiv (jd : JDB) (sd : SDB) : Prop :=
+def equiv (jd : JDB) (sd : SDB) : Prop :=
   List.Perm (jd.map toS) sd.toRows
 
+/-- Result-level lift of `equiv`: two query results are equivalent iff
+    they share a tag and their payloads agree (permutation on databases,
+    equality on scalars). --/
 def result_equiv : JResult → SResult → Prop
   | JResult.db jd,  SResult.db sd  => equiv jd sd
   | JResult.num n1, SResult.num n2 => n1 = n2
@@ -266,10 +265,6 @@ theorem eval_bridgeS (c : Cond) (s : Suser) :
   | or c1 c2 ih1 ih2 =>
     simp only [Cond.evalJ, Cond.evalS]
     rw [ih1, ih2]
-
-theorem db_equiv_bridge (jd : JDB) (sd : SDB) :
-    equiv jd sd ↔ (∀ u, u ∈ jd ↔ toS u ∈ sd.toRows) ∧ (∀ s, s ∈ sd.toRows ↔ toJ s ∈ jd) := by
-  simp [equiv, SDB.toRows]
 
 /-- Round-trip for 3-way zip: rebuilding three columns from a list of
     triples and zipping them back recovers the original triple list. --/
@@ -321,188 +316,74 @@ theorem toRows_map_reconstruct (sd : SDB) (f : Suser → Suser) :
   simp only [SDB.toRows]
   exact zip3_map_components (zip3 sd.names sd.ages sd.roles |>.map f)
 
--- Permutation equivalence implies set equivalence.
-theorem permEquiv_implies_equiv {jd : JDB} {sd : SDB} (h : permEquiv jd sd) :
-    equiv jd sd := by
-  unfold permEquiv at h
-  refine ⟨?_, ?_⟩
-  · intro u
-    constructor
-    · intro hu
-      have h1 : toS u ∈ jd.map toS := List.mem_map_of_mem hu
-      exact h.mem_iff.mp h1
-    · intro hu
-      have h1 : toS u ∈ jd.map toS := h.mem_iff.mpr hu
-      obtain ⟨v, hv, hvu⟩ := List.mem_map.mp h1
-      have heq : v = u := by
-        have := congrArg toJ hvu
-        simpa using this
-      exact heq ▸ hv
-  · intro s
-    constructor
-    · intro hs
-      have h1 : s ∈ jd.map toS := h.mem_iff.mpr hs
-      obtain ⟨v, hv, hvs⟩ := List.mem_map.mp h1
-      have : toJ s = v := by
-        have h2 := congrArg toJ hvs
-        simpa using h2.symm
-      exact this ▸ hv
-    · intro hs
-      have h1 : toS (toJ s) ∈ jd.map toS := List.mem_map_of_mem hs
-      have h2 : toS (toJ s) = s := toS_toJ s
-      rw [h2] at h1
-      exact h.mem_iff.mp h1
+/-- Filter through `map toS` matches the JSON-side and SQL-side predicates.
+    Cornerstone for the `find` case of the main theorem. --/
+private theorem filter_eval_bridge (jd : JDB) (c : Cond) :
+    (jd.filter c.evalJ).map toS = (jd.map toS).filter c.evalS := by
+  induction jd with
+  | nil => rfl
+  | cons u jd' ih =>
+    simp only [List.map_cons, List.filter_cons]
+    rw [← eval_bridgeJ c u]
+    cases c.evalJ u
+    · simp [ih]
+    · simp [ih]
+
+/-- Negated-filter through `map toS`. For the `drop` case. --/
+private theorem filter_neg_eval_bridge (jd : JDB) (c : Cond) :
+    (jd.filter (fun u => !c.evalJ u)).map toS
+      = (jd.map toS).filter (fun s => !c.evalS s) := by
+  induction jd with
+  | nil => rfl
+  | cons u jd' ih =>
+    simp only [List.map_cons, List.filter_cons]
+    rw [← eval_bridgeJ c u]
+    cases c.evalJ u
+    · simp [ih]
+    · simp [ih]
+
+/-- Conditional update commutes with `map toS`. For the `modify` case. --/
+private theorem map_update_bridge (jd : JDB) (col : Col) (v : Value) (c : Cond) :
+    (jd.map (apply_update_ifJ col v c)).map toS
+      = (jd.map toS).map (apply_update_ifS col v c) := by
+  rw [List.map_map, List.map_map]
+  congr 1
+  funext u
+  exact (applyUpdateIf_bridge col v c u).symm
 
 /--
-  Main correctness theorem for the JQ → SQL translation.
-  Under permutation equivalence, executing any query on jd
-  and the translated query on sd yields equivalent
-  results.
+  Main correctness theorem. Under permutation equivalence between the
+  JSON and SQL databases, evaluating any jq query on `jd` and the
+  translated query on `sd` yields equivalent results — multiplicities
+  agree on database results, and counts agree on scalar results.
 --/
-theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : permEquiv jd sd) :
+theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : equiv jd sd) :
     result_equiv (eval_jquery jd jq) (eval_squery sd (jquery_to_squery jq)) := by
-
-  have hset : equiv jd sd := permEquiv_implies_equiv h
-  rcases hset with ⟨hJ, hS⟩
+  unfold equiv at h
   cases jq with
   | find col c =>
     show equiv _ _
-    constructor
-    · intro u
-      constructor
-      · intro hu
-        have ⟨hmem, hcond⟩ := List.mem_filter.mp hu
-        have hmem_rows : toS u ∈ sd.toRows := (hJ u).1 hmem
-        have hcond_rows : c.evalS (toS u) = true := by
-          simpa [eval_bridgeJ] using hcond
-        simp [toRows_filter_reconstruct]
-        exact ⟨hmem_rows, hcond_rows⟩
-      · intro hu
-        simp [toRows_filter_reconstruct] at hu
-        rcases hu with ⟨hmem, hcond⟩
-        have hmem_jd : toJ (toS u) ∈ jd := (hS (toS u)).1 hmem
-        have hmem_jd' : u ∈ jd := by simpa using hmem_jd
-        have hcond_j : c.evalJ u = true := by
-          simpa [eval_bridgeJ] using hcond
-        exact List.mem_filter.mpr ⟨hmem_jd', hcond_j⟩
-    · intro s
-      constructor
-      · intro hs
-        simp [toRows_filter_reconstruct] at hs
-        rcases hs with ⟨hmem, hcond⟩
-        have hmem_jd : toJ s ∈ jd := (hS s).1 hmem
-        have hcond_j : c.evalJ (toJ s) = true := by
-          simpa [eval_bridgeS] using hcond
-        exact List.mem_filter.mpr ⟨hmem_jd, hcond_j⟩
-      · intro hs
-        have ⟨hmem, hcond⟩ := List.mem_filter.mp hs
-        have hmem_rows : s ∈ sd.toRows := (hJ (toJ s)).1 hmem
-        have hcond_s : c.evalS s = true := by
-          simpa [eval_bridgeS] using hcond
-        simp [toRows_filter_reconstruct]
-        exact ⟨hmem_rows, hcond_s⟩
+    unfold equiv
+    rw [filter_eval_bridge, toRows_filter_reconstruct]
+    exact h.filter c.evalS
 
   | drop c =>
     show equiv _ _
-    constructor
-    · intro u
-      constructor
-      · intro hu
-        have ⟨hmem, hcond⟩ := List.mem_filter.mp hu
-        have hmem_rows : toS u ∈ sd.toRows := (hJ u).1 hmem
-        have hfalse : c.evalJ u = false := by
-          cases h : c.evalJ u
-          · rfl
-          · rw [h] at hcond; simp at hcond
-        have hcond_rows : c.evalS (toS u) = false := by
-          rw [← eval_bridgeJ]; exact hfalse
-        have hbang : (!c.evalS (toS u)) = true := by grind
-        simp [toRows_filter_reconstruct]
-        grind
-      · intro hu
-        simp [toRows_filter_reconstruct] at hu
-        rcases hu with ⟨hmem, hcond⟩
-        have hmem_jd : toJ (toS u) ∈ jd := (hS (toS u)).1 hmem
-        have hmem_jd' : u ∈ jd := by simpa using hmem_jd
-        have hfalseS : c.evalS (toS u) = false := by
-          cases h : c.evalS (toS u)
-          · rfl
-          · rw [h] at hcond; simp at hcond
-        have hfalse : c.evalJ u = false := by
-          rw [eval_bridgeJ]; exact hfalseS
-        have hcond_j : (!c.evalJ u) = true := by grind
-        exact List.mem_filter.mpr ⟨hmem_jd', hcond_j⟩
-    · intro s
-      constructor
-      · intro hs
-        simp [toRows_filter_reconstruct] at hs
-        rcases hs with ⟨hmem, hcond⟩
-        have hmem_jd : toJ s ∈ jd := (hS s).1 hmem
-        have hfalseS : c.evalS s = false := by
-          cases h : c.evalS s
-          · rfl
-          · rw [h] at hcond; simp at hcond
-        have hfalse : c.evalJ (toJ s) = false := by
-          rw [← eval_bridgeS]; exact hfalseS
-        have hcond_j : (!c.evalJ (toJ s)) = true := by grind
-        exact List.mem_filter.mpr ⟨hmem_jd, hcond_j⟩
-      · intro hs
-        have ⟨hmem, hcond⟩ := List.mem_filter.mp hs
-        have hmem_rows : s ∈ sd.toRows := (hJ (toJ s)).1 hmem
-        have hfalse : c.evalJ (toJ s) = false := by
-          cases h : c.evalJ (toJ s)
-          · rfl
-          · rw [h] at hcond; simp at hcond
-        have hcond_s : c.evalS s = false := by
-          rw [eval_bridgeS]; exact hfalse
-        have hbang : (!c.evalS s) = true := by grind
-        simp [toRows_filter_reconstruct]
-        grind
+    unfold equiv
+    rw [filter_neg_eval_bridge, toRows_filter_reconstruct]
+    exact h.filter (fun s => !c.evalS s)
 
   | prepend u =>
     show equiv _ _
-    constructor
-    · intro v
-      constructor
-      · intro hv
-        rcases List.mem_cons.mp hv with rfl | hv'
-        · simp [toRows_insert]
-        · simp [toRows_insert]
-          right; exact (hJ v).1 hv'
-      · intro hv
-        simp [toRows_insert] at hv
-        rcases hv with heq | hmem
-        · have : v = u := by
-            have h := congrArg toJ heq
-            simpa using h
-          rw [this]; exact List.mem_cons_self
-        · have hv_jd : v ∈ jd := by
-            have := (hS (toS v)).1 hmem
-            simpa using this
-          exact List.mem_cons_of_mem _ hv_jd
-    · intro s
-      constructor
-      · intro hs
-        simp [toRows_insert] at hs
-        rcases hs with rfl | hmem
-        · rw [toJ_toS]; exact List.mem_cons_self
-        · exact List.mem_cons_of_mem _ ((hS s).1 hmem)
-      · intro hs
-        rcases List.mem_cons.mp hs with heq | hmem
-        · have : s = toS u := by
-            have h := congrArg toS heq
-            simpa using h
-          simp [toRows_insert]; left; exact this
-        · simp [toRows_insert]
-          right
-          have := (hJ (toJ s)).1 hmem
-          simpa using this
+    unfold equiv
+    rw [List.map_cons, toRows_insert]
+    exact h.cons (toS u)
 
   | clear =>
     show equiv _ _
-    refine ⟨?_, ?_⟩
-    · intro u; simp [SDB.toRows, zip3]
-    · intro s; simp [SDB.toRows, zip3]
+    unfold equiv
+    show List.Perm (([] : JDB).map toS) (SDB.mk [] [] []).toRows
+    simp [SDB.toRows, zip3]
 
   | length =>
     show jd.length = sd.toRows.length
@@ -512,17 +393,6 @@ theorem query_equiv (jd : JDB) (sd : SDB) (jq : JQuery) (h : permEquiv jd sd) :
 
   | modify col v c =>
     show equiv _ _
-    have hPerm : permEquiv (jd.map (apply_update_ifJ col v c))
-                  (SDB.mk
-                    ((sd.toRows.map (apply_update_ifS col v c)).map (·.1))
-                    ((sd.toRows.map (apply_update_ifS col v c)).map (·.2.1))
-                    ((sd.toRows.map (apply_update_ifS col v c)).map (·.2.2))) := by
-      unfold permEquiv
-      have hbridge : (jd.map (apply_update_ifJ col v c)).map toS
-                   = (jd.map toS).map (apply_update_ifS col v c) := by
-        rw [List.map_map, List.map_map]
-        congr 1; funext u
-        exact (applyUpdateIf_bridge col v c u).symm
-      rw [hbridge, toRows_map_reconstruct]
-      exact h.map (apply_update_ifS col v c)
-    exact permEquiv_implies_equiv hPerm
+    unfold equiv
+    rw [map_update_bridge, toRows_map_reconstruct]
+    exact h.map (apply_update_ifS col v c)
