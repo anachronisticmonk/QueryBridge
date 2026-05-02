@@ -53,35 +53,53 @@ def thmSpecs : List ThmSpec := [
   { name := `query_equiv
     title := "Headline equivalence theorem"
     description :=
-      "For every JSON database, every SQL database that's permutation-equivalent " ++
-      "to it, and every supported jq query, evaluating the jq query and evaluating " ++
-      "its translated SQL query produce equivalent results." },
-  { name := `permEquiv_implies_equiv
-    title := "Permutation equivalence implies set equivalence"
-    description :=
-      "If two databases are permutation-equivalent (multiset equal) then they " ++
-      "are also set-equivalent. Used as a stepping stone in the find/drop arms " ++
-      "of query_equiv." },
-  { name := `db_equiv_bridge
-    title := "JDB ↔ SDB structural bridge"
-    description :=
-      "Two databases are equivalent iff every JSON record is in the column-form " ++
-      "rows and vice-versa." },
+      "For every JSON database `jd`, every SQL database `sd` that is " ++
+      "multiset-equivalent to it (`equiv jd sd`, defined as " ++
+      "`List.Perm (jd.map toS) sd.toRows`), and every supported jq query, " ++
+      "evaluating the jq query and evaluating its translated SQL query " ++
+      "produce equivalent results — multiplicities agree on database " ++
+      "results, counts agree on scalar results." },
   { name := `eval_bridgeJ
     title := "Cond.evalJ bridges through toS"
     description :=
-      "Evaluating a Cond on the JSON record agrees with evaluating it on the " ++
-      "SQL row produced by `toS`." },
-  { name := `applyUpdateIf_bridge
-    title := "Per-row UPDATE preserves the JSON ↔ SQL bridge"
+      "Evaluating a `Cond` on a JSON record agrees with evaluating it on " ++
+      "the SQL row produced by `toS`. Foundational lemma used by every " ++
+      "predicate-bearing arm of `query_equiv` (find / drop / modify)." },
+  { name := `eval_bridgeS
+    title := "Cond.evalS bridges through toJ"
     description :=
-      "Applying a conditional UPDATE to a JSON record and converting to SQL " ++
-      "produces the same row as applying the SQL UPDATE to the converted row." },
+      "The dual of `eval_bridgeJ`: evaluating a `Cond` on a SQL row " ++
+      "agrees with evaluating it on the JSON record produced by `toJ`." },
+  { name := `toRows_filter_reconstruct
+    title := "Columnar SDB filter ↔ row-wise filter"
+    description :=
+      "Filtering an SDB row-by-row and reconstructing it from the " ++
+      "surviving columns is the same as filtering `sd.toRows` directly. " ++
+      "The find- and drop-case proofs of `query_equiv` use this as the " ++
+      "structural bridge between the per-column and the per-row views." },
+  { name := `toRows_insert
+    title := "Columnar SDB insert ↔ row-wise prepend"
+    description :=
+      "Inserting a value into each of an SDB's column lists corresponds " ++
+      "exactly to prepending the assembled row to `sd.toRows`. Used by the " ++
+      "prepend-case (`JQuery.prepend ↦ SQuery.insert`) of `query_equiv`." },
+  { name := `toRows_map_reconstruct
+    title := "Columnar SDB map ↔ row-wise map"
+    description :=
+      "Mapping each column of an SDB and reconstructing the SDB equals " ++
+      "mapping `sd.toRows` directly. Used by the modify-case " ++
+      "(`JQuery.modify ↦ SQuery.update`) of `query_equiv`." },
+  { name := `applyUpdateIf_bridge
+    title := "Per-row conditional UPDATE preserves the JSON ↔ SQL bridge"
+    description :=
+      "Applying a conditional UPDATE to a JSON record and then converting " ++
+      "to SQL produces the same row as applying the SQL UPDATE to the " ++
+      "already-converted row." },
   { name := `toJ_toS
-    title := "toS ∘ toJ is identity (round-trip lemma 1)"
+    title := "toJ ∘ toS is identity (round-trip lemma 1)"
     description := "Converting a JSON user to a SQL row and back yields the same record." },
   { name := `toS_toJ
-    title := "toJ ∘ toS is identity (round-trip lemma 2)"
+    title := "toS ∘ toJ is identity (round-trip lemma 2)"
     description := "Converting a SQL row to a JSON user and back yields the same record." }
 ]
 

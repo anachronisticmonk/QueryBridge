@@ -37,72 +37,73 @@ MAIN_LEAN = LEAN_DIR / "Main.lean"
 # Main.lean is restructured, only these line numbers need updating.
 _CASES: dict[str, dict[str, Any]] = {
     "find": {
-        "lines": (368, 403),
-        "lemmas": ["permEquiv_implies_equiv", "eval_bridgeJ", "eval_bridgeS",
-                   "toRows_filter_reconstruct"],
+        "lines": (364, 368),
+        "lemmas": ["filter_eval_bridge (private)", "toRows_filter_reconstruct",
+                   "List.Perm.filter", "eval_bridgeJ"],
         "gloss": (
             "JQuery.find c p translates to SQuery.select c p. "
-            "The proof shows: a JSON record satisfies the predicate "
-            "iff the corresponding SQL row does (via eval_bridgeJ / "
-            "eval_bridgeS), so the filtered JSON list is equivalent "
-            "to the filtered SQL projection."
+            "The proof rewrites the JSON-side filter into an "
+            "SQL-side filter via filter_eval_bridge (which itself uses "
+            "eval_bridgeJ on every record) and toRows_filter_reconstruct, "
+            "then applies List.Perm.filter to the equivalence hypothesis."
         ),
         "translation": "JQuery.find c p ⟶ SQuery.select c p",
     },
     "drop": {
-        "lines": (405, 460),
-        "lemmas": ["permEquiv_implies_equiv", "eval_bridgeJ", "eval_bridgeS",
-                   "toRows_filter_reconstruct"],
+        "lines": (370, 374),
+        "lemmas": ["filter_neg_eval_bridge (private)", "toRows_filter_reconstruct",
+                   "List.Perm.filter", "eval_bridgeJ"],
         "gloss": (
             "JQuery.drop c (jq's del) translates to SQuery.delete c. "
-            "Symmetric to the find case: the survivors of a deletion "
-            "in JSON correspond exactly to the survivors in SQL, "
-            "because the predicate evaluates the same way on both sides."
+            "Symmetric to the find case: the survivors of a deletion in "
+            "JSON correspond exactly to the survivors in SQL because the "
+            "predicate (negated) evaluates the same way on both sides."
         ),
         "translation": "JQuery.drop c ⟶ SQuery.delete c",
     },
     "prepend": {
-        "lines": (462, 499),
-        "lemmas": ["permEquiv_implies_equiv", "toRows_insert", "toJ_toS"],
+        "lines": (376, 380),
+        "lemmas": ["List.map_cons", "toRows_insert", "List.Perm.cons"],
         "gloss": (
-            "JQuery.prepend u (jq's insert) translates to "
-            "SQuery.insert (toS u). The proof shows that prepending "
-            "a JSON record then converting to SQL rows is the same "
-            "as inserting the converted row into the column-form."
+            "JQuery.prepend u (jq's insert) translates to SQuery.insert (toS u). "
+            "Prepending a JSON record then converting commutes with inserting "
+            "the converted row into the column-form, so the equivalence is "
+            "preserved by List.Perm.cons."
         ),
         "translation": "JQuery.prepend u ⟶ SQuery.insert (toS u)",
     },
     "clear": {
-        "lines": (501, 505),
-        "lemmas": [],
+        "lines": (382, 386),
+        "lemmas": ["SDB.toRows", "zip3"],
         "gloss": (
-            "JQuery.clear (jq's del(.[])) translates to "
-            "SQuery.truncate. Both sides reduce to an empty database, "
-            "so equivalence is immediate from the definition of "
-            "SDB.toRows on empty column lists."
+            "JQuery.clear (jq's del(.[])) translates to SQuery.truncate. "
+            "Both sides reduce to an empty database; equivalence is "
+            "immediate from the definitions of SDB.toRows and zip3 on empty "
+            "column lists."
         ),
         "translation": "JQuery.clear ⟶ SQuery.truncate",
     },
     "length": {
-        "lines": (507, 511),
+        "lines": (388, 392),
         "lemmas": ["List.Perm.length_eq", "List.length_map"],
         "gloss": (
-            "JQuery.length translates to SQuery.count. Aggregate "
-            "queries need permutation equivalence (multiset equality), "
-            "not just set equivalence. Lengths are equal because "
+            "JQuery.length translates to SQuery.count. Aggregate queries "
+            "need multiset equality (`equiv` is `List.Perm (jd.map toS) "
+            "sd.toRows`), not just set equivalence. Lengths agree because "
             "List.Perm preserves length and toS is injective."
         ),
         "translation": "JQuery.length ⟶ SQuery.count",
     },
     "modify": {
-        "lines": (513, 528),
-        "lemmas": ["applyUpdateIf_bridge", "toRows_map_reconstruct",
-                   "permEquiv_implies_equiv", "List.Perm.map"],
+        "lines": (394, 398),
+        "lemmas": ["map_update_bridge (private)", "toRows_map_reconstruct",
+                   "applyUpdateIf_bridge", "List.Perm.map"],
         "gloss": (
             "JQuery.modify col v c translates to SQuery.update col v c. "
-            "The proof builds permEquiv between the post-update databases "
-            "by applying the per-row UPDATE bridge under the existing "
-            "permutation equivalence."
+            "The proof rewrites both sides into the same `apply_update_ifS`-mapped "
+            "form via map_update_bridge (which uses applyUpdateIf_bridge per row) "
+            "and toRows_map_reconstruct, then applies List.Perm.map to the "
+            "equivalence hypothesis."
         ),
         "translation": "JQuery.modify col v c ⟶ SQuery.update col v c",
     },

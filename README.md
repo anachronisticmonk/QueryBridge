@@ -415,7 +415,7 @@ query, the UI doesn't show "the proof of `query_equiv`" in some abstract
 sense — it shows the *case of the proof* that governs this query, the
 specific lemmas it depends on, and the kernel's verdict for *this* input.
 
-![Lean infoview during a per-query proof](figures/proof_window_ii.png)
+![Lean infoview during a per-query proof](figures/proof_window_updated.png)
 
 The proof of `query_equiv` is by `cases jq`: each `JQuery` constructor gets
 its own arm. `sqlGenMain` reports which constructor your jq parsed to;
