@@ -294,11 +294,6 @@ depends on); Python is what runs the SQL and serves the verdicts. The
 React layer never touches Lean directly — it only consumes the JSON the
 Python layer assembles.
 
-For comparison, the same proof states the binaries surface look like
-this when opened in the Lean editor:
-
-![Lean infoview proof state](figures/proof_window.png)
-
 ---
 
 ## The conversation, in detail
