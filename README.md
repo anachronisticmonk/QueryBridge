@@ -347,21 +347,42 @@ Python runtime that serves the API and the SPA on a single port. Pass
 
 The slow part of `docker build` is the Lean compile. To edit Python or
 `Main.lean` and have the container pick up your changes on restart, mount
-your working tree on top of the image:
+the host files individually on top of the image:
 
 ```bash
 docker run --rm -p 8000:8000 \
   -v "$(pwd)/backend:/app/backend:ro" \
-  -v "$(pwd)/ProofPilot:/app/ProofPilot:ro" \
+  -v "$(pwd)/ProofPilot/Main.lean:/app/ProofPilot/Main.lean:ro" \
+  -v "$(pwd)/ProofPilot/proof_trace.json:/app/ProofPilot/proof_trace.json:ro" \
   querybridge:latest
 ```
 
-Caveat: the second mount also overlays your host's `ProofPilot/.lake/`
-on top of the image's, which hides the Linux Lean binaries baked into
-the image. On macOS or any non-Linux host this will break the per-query
-flow because your local `.lake/build/bin/sqlGenMain` is the wrong
-architecture for the Linux container. If you only want to iterate on
-the Python backend, drop the second mount.
+If your terminal mangles the trailing backslashes when you paste (zsh
+and some terminal emulators do), use the single-line form:
+
+```bash
+docker run --rm -p 8000:8000 -v "$(pwd)/backend:/app/backend:ro" -v "$(pwd)/ProofPilot/Main.lean:/app/ProofPilot/Main.lean:ro" -v "$(pwd)/ProofPilot/proof_trace.json:/app/ProofPilot/proof_trace.json:ro" querybridge:latest
+```
+
+To detach and name the container so you can `docker restart` it after
+edits, add `-d --name querybridge-dev` and drop `--rm`:
+
+```bash
+docker run -d --name querybridge-dev -p 8000:8000 -v "$(pwd)/backend:/app/backend:ro" -v "$(pwd)/ProofPilot/Main.lean:/app/ProofPilot/Main.lean:ro" -v "$(pwd)/ProofPilot/proof_trace.json:/app/ProofPilot/proof_trace.json:ro" querybridge:latest
+
+# After editing source on the host:
+docker restart querybridge-dev
+```
+
+**Don't mount the whole `ProofPilot/` directory.** That would overlay your
+host's `ProofPilot/.lake/build/bin/sqlGenMain` on top of the image's, and
+on macOS / non-Linux hosts those host binaries are the wrong architecture
+for the Linux container — every `/api/query` call will fail with
+`OSError: [Errno 8] Exec format error`. Mounting only the two text files
+the backend reads at runtime (`Main.lean` for per-query proof sources,
+`proof_trace.json` for `/api/proofs`) keeps the image's Linux Lean
+binaries intact. If you only need to iterate on Python, the first mount
+on its own is enough.
 
 ### Local — three steps
 
