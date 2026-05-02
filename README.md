@@ -46,7 +46,7 @@ The proof is mechanized in Lean 4 in `ProofPilot/Main.lean`, and the same transl
 
 ## End-to-end demo
 
-![QueryBridge UI](figures/end_to_end_ui.png)
+![QueryBridge UI](figures/end_to_end_updated.png)
 
 A typical run:
 
