@@ -339,6 +339,26 @@ prebuilt `.olean`s and compiles the Lean executables, then assembles a slim
 Python runtime that serves the API and the SPA on a single port. Pass
 `-e ANTHROPIC_API_KEY=…` to use the live LLM in place of the mock.
 
+#### Iterating on the source without rebuilding the image
+
+The slow part of `docker build` is the Lean compile. To edit Python or
+`Main.lean` and have the container pick up your changes on restart, mount
+your working tree on top of the image:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -v "$(pwd)/backend:/app/backend:ro" \
+  -v "$(pwd)/ProofPilot:/app/ProofPilot:ro" \
+  querybridge:latest
+```
+
+Caveat: the second mount also overlays your host's `ProofPilot/.lake/`
+on top of the image's, which hides the Linux Lean binaries baked into
+the image. On macOS or any non-Linux host this will break the per-query
+flow because your local `.lake/build/bin/sqlGenMain` is the wrong
+architecture for the Linux container. If you only want to iterate on
+the Python backend, drop the second mount.
+
 ### Local — three steps
 
 `setup.sh` automates the full flow (backend deps, backend up, frontend deps,

@@ -28,6 +28,10 @@ from lean_client import LEAN_DIR
 
 BIN_PROP_RUNNER = LEAN_DIR / ".lake" / "build" / "bin" / "propRunner"
 BIN_PROOF_TRACE = LEAN_DIR / ".lake" / "build" / "bin" / "proofTrace"
+# Pre-computed proofTrace output, written at Lean-build time. The slim
+# runtime image doesn't ship `lake` (which proofTrace needs to discover
+# oleans), so we serve this static snapshot instead.
+PROOF_TRACE_CACHE = LEAN_DIR / "proof_trace.json"
 
 
 def collect_counterexamples() -> dict:
@@ -81,16 +85,31 @@ def collect_counterexamples() -> dict:
 
 
 def collect_proof_traces() -> dict:
-    """Invoke `proofTrace` (under `lake env`, so the binary can find
-    `Main.olean` and its transitive package oleans on LEAN_PATH) and
-    return the kernel-verified proof traces for each named theorem
+    """Return the kernel-verified proof traces for each named theorem
     in `ProofPilot/Main.lean`. Each item in `items` carries:
 
         name, title, description, kind, type, status,
         axioms, proofTermDepth
 
     See ProofPilot/ProofTrace.lean for the contract.
+
+    Resolution order:
+      1. Pre-computed snapshot at `ProofPilot/proof_trace.json` if
+         present — the prod Docker image bakes this at build time so
+         /api/proofs works without `lake` at runtime.
+      2. Live invocation of the `proofTrace` binary under `lake env`
+         (dev path — needs a Lean toolchain on PATH).
     """
+    # 1. Cached snapshot — serve immediately if present.
+    if PROOF_TRACE_CACHE.exists():
+        try:
+            items = json.loads(PROOF_TRACE_CACHE.read_text(encoding="utf-8"))
+            return {"available": True, "missing_binary": None, "items": items}
+        except (json.JSONDecodeError, OSError):
+            # Fall through to live invocation if the snapshot is unreadable.
+            pass
+
+    # 2. Live invocation via lake env.
     if not BIN_PROOF_TRACE.exists():
         return {
             "available": False,

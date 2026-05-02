@@ -30,7 +30,7 @@ jobs:
 
       - name: Build the executables
         working-directory: ProofPilot
-        run: lake build sqlGenMain sqlGenError sqlGenBug2 sqlGenBug3
+        run: lake build sqlGenMain sqlGenError sqlGenBug2 sqlGenBug3 propRunner proofTrace
 
       - name: Smoke-test each binary
         working-directory: ProofPilot
@@ -39,3 +39,5 @@ jobs:
           ./.lake/build/bin/sqlGenError 'length'
           ./.lake/build/bin/sqlGenBug2 '.[] | delete(.age > 30)'
           ./.lake/build/bin/sqlGenBug3 '.[] | update(.age, 50, .name == "Alice")'
+          ./.lake/build/bin/propRunner | head -c 200
+          lake env ./.lake/build/bin/proofTrace | head -c 200

@@ -2,10 +2,18 @@
 #
 # Self-contained image for QueryBridge:
 #   - Stage 1 builds the React/Vite frontend → static dist/
-#   - Stage 2 fetches the Mathlib build cache and compiles four Lean
-#     executables (sqlGenMain, sqlGenError, sqlGenBug2, sqlGenBug3)
+#   - Stage 2 fetches the Mathlib build cache and compiles the Lean
+#     executables (sqlGenMain, sqlGenError, sqlGenBug2, sqlGenBug3,
+#     propRunner, proofTrace) used by the FastAPI endpoints
 #   - Stage 3 is a slim Python runtime with FastAPI, the Lean binaries,
 #     and the static frontend mounted at "/"
+#
+# Note: /api/proofs invokes `lake env proofTrace` at runtime so the binary
+# can `importModules` against Main.olean. The slim runtime image does not
+# include lake / oleans, so /api/proofs degrades gracefully (the backend
+# returns {available: false, error: "lake not found ..."} which the UI
+# renders as a "build proofTrace locally" hint). /api/query and
+# /api/properties work fully because their binaries are statically linked.
 #
 # Build:
 #   docker build -t querybridge .
@@ -53,7 +61,7 @@ WORKDIR /build/ProofPilot
 # We tolerate that — the dependency *sources* are downloaded successfully
 # before the hook runs — then restore the project toolchain to match
 # Mathlib's so the subsequent build picks the right elan toolchain.
-COPY ProofPilot/lakefile.lean ProofPilot/lean-toolchain ./
+COPY ProofPilot/lakefile.toml ProofPilot/lean-toolchain ./
 RUN lake update || true \
  && cp .lake/packages/mathlib/lean-toolchain ./lean-toolchain
 
@@ -63,9 +71,19 @@ RUN lake update || true \
 # demand, which is slow but reliable.
 RUN lake exe cache get || true
 
-# Step 3 — bring in the project's Lean source and build the four exes.
+# Step 3 — bring in the project's Lean source and build the exes the
+# backend talks to: sqlGenMain (per-query verified path), propRunner
+# (Plausible counter-examples for /api/properties), proofTrace (kernel
+# proof traces for /api/proofs), plus the legacy sqlGenError/Bug2/Bug3
+# variants retained for the buggy-evaluator demo.
 COPY ProofPilot/*.lean ./
-RUN lake build sqlGenMain sqlGenError sqlGenBug2 sqlGenBug3
+RUN lake build sqlGenMain sqlGenError sqlGenBug2 sqlGenBug3 propRunner proofTrace
+
+# Step 4 — bake a static snapshot of proofTrace's output. The slim
+# runtime image doesn't ship `lake`, which proofTrace needs to find
+# the project's oleans at runtime. The snapshot is deterministic
+# (same theorems, same axioms every call), so caching is correct.
+RUN lake env ./.lake/build/bin/proofTrace > proof_trace.json
 
 # ============================================================
 # Stage 3 — Runtime
@@ -89,11 +107,21 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 # Backend source.
 COPY backend/ /app/backend/
 
-# Lean binaries — only the four executables, ~125 MB each.
+# Lean binaries — statically-linked executables, ~125 MB each.
 COPY --from=lean-build /build/ProofPilot/.lake/build/bin/sqlGenMain   /app/ProofPilot/.lake/build/bin/sqlGenMain
 COPY --from=lean-build /build/ProofPilot/.lake/build/bin/sqlGenError  /app/ProofPilot/.lake/build/bin/sqlGenError
 COPY --from=lean-build /build/ProofPilot/.lake/build/bin/sqlGenBug2   /app/ProofPilot/.lake/build/bin/sqlGenBug2
 COPY --from=lean-build /build/ProofPilot/.lake/build/bin/sqlGenBug3   /app/ProofPilot/.lake/build/bin/sqlGenBug3
+COPY --from=lean-build /build/ProofPilot/.lake/build/bin/propRunner   /app/ProofPilot/.lake/build/bin/propRunner
+COPY --from=lean-build /build/ProofPilot/.lake/build/bin/proofTrace   /app/ProofPilot/.lake/build/bin/proofTrace
+
+# Lean source files — proof_witness.py reads Main.lean to extract the
+# per-query proof case source spans. Tiny (<30 KB total); no compile.
+COPY ProofPilot/*.lean /app/ProofPilot/
+
+# Pre-computed proofTrace snapshot — backend serves /api/proofs from
+# this static JSON instead of invoking `lake env proofTrace` at runtime.
+COPY --from=lean-build /build/ProofPilot/proof_trace.json /app/ProofPilot/proof_trace.json
 
 # Static frontend bundle — served by FastAPI in production (see main.py).
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist

@@ -114,9 +114,20 @@ _query_equiv_meta: dict[str, Any] | None = None
 
 
 def _load_main_lean() -> list[str]:
+    """Read `ProofPilot/Main.lean` and cache its lines.
+
+    In the slim Docker runtime the `.lean` source may not be shipped
+    (only the compiled binaries are). When the file is missing, return
+    an empty list so the proof witness still renders — `case_source`
+    will be empty but every other field still carries kernel-derived
+    information from sqlGenMain + proofTrace.
+    """
     global _main_lean_lines
     if _main_lean_lines is None:
-        _main_lean_lines = MAIN_LEAN.read_text(encoding="utf-8").splitlines()
+        try:
+            _main_lean_lines = MAIN_LEAN.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            _main_lean_lines = []
     return _main_lean_lines
 
 
