@@ -7,11 +7,12 @@
 **Verified jq → SQL translation, kernel-checked in Lean 4.**
 
 Type a query in plain English. A model produces a [jq](https://jqlang.org/)
-expression over the JSON view of the data; QueryBridge translates that jq into
-the equivalent SQL over the relational/columnar view; both queries run on
-identical seed data and the answers are shown side-by-side. The translation is
-**proven correct in Lean 4** — every theorem behind it is kernel-checked, and
-every property the proof should rule out is randomly stress-tested by
+expression over the JSON view of the data; the verified Lean binary
+translates that jq into the equivalent SQL over the relational/columnar
+view; the SQL runs on the seed data and the answer is shown alongside the
+proof witness for *that specific query*. The translation is **proven
+correct in Lean 4** — every theorem behind it is kernel-checked, and every
+property the proof should rule out is randomly stress-tested by
 [Plausible](https://github.com/leanprover-community/plausible).
 
 ---
@@ -68,41 +69,233 @@ The end-to-end flow is shown in the GUI screenshot above.
 
 ## Architecture
 
+The system has three layers (Lean / Python / React). Each is summarised
+on its own first; the integrated end-to-end picture follows.
+
+### Lean layer — what becomes a binary, and from what
+
 ```
-   ┌──────────────┐   POST /api/query     ┌────────────────┐  argv     ┌──────────────────────┐
-   │  React SPA   │  ──────────────────▶  │    FastAPI     │  ───────▶ │   sqlGenMain         │
-   │  (Vite)      │  ◀──────────────────  │    backend     │  ◀──────  │   (Lean kernel)      │
-   └──────┬───────┘   proof_witness JSON  └───────┬────────┘   JSON    └──────────────────────┘
-          │                                       │                     parses jq, applies the
-          │  GET /api/properties                  │  subprocess         proven jquery_to_squery,
-          │  GET /api/proofs                      │                     evaluates both sides,
-          ▼                                       ▼                     emits kernel_match flag
-   ┌──────────────┐                       ┌────────────────┐
-   │ tabs:        │                       │  propRunner    │  argv     ┌──────────────────────┐
-   │  · Query     │                       │  proofTrace    │  ───────▶ │  Plausible.checkIO   │
-   │  · Proofs    │                       │  (Lean exes)   │  ◀──────  │  Lean.collectAxioms  │
-   │  · Property  │                       └────────────────┘   JSON    │  Meta.ppExpr         │
-   │     tests    │                                                    └──────────────────────┘
-   └──────────────┘
+                         ProofPilot/   (Lean 4 — kernel-checked at `lake build`)
+
+   ════════════ VERIFIED PATH ════════════         ════════ PROPERTY-TEST PATH ═══════
+
+   ┌──────────────────────────────────┐            ┌──────────────────────────────────┐
+   │           Main.lean              │            │           Error.lean             │
+   │   • JDB / SDB models             │            │   Near-duplicate of Main.lean    │
+   │   • JQuery / SQuery types        │            │   with three seeded bugs in      │
+   │   • eval_jquery / eval_squery    │            │   eval_jquery:                   │
+   │   • jquery_to_squery   (PROVEN)  │            │   • find: predicate inverted     │
+   │   • query_equiv        (THEOREM) │            │   • length: returns the const 1  │
+   │   • six supporting lemmas        │            │   • modify: returns []           │
+   └──────┬─────────────────┬─────────┘            └─────────────┬────────────────────┘
+          │ import          │ import                             │ import
+          ▼                 ▼                                    ▼
+   ┌──────────────┐   ┌──────────────────┐           ┌──────────────────────────┐
+   │ JqGenMain    │   │  ProofTrace.lean │           │     Properties.lean      │
+   │ .lean        │   │  • Lean.import-  │           │  • Arbitrary instances   │
+   │  jqToJQuery  │   │    Modules       │           │    for JDB, JQuery, …    │
+   │  parses jq   │   │  • Meta.ppExpr   │           │  • prop_modify_…count    │
+   │  string into │   │  • Lean.collect  │           │  • prop_length_returns…  │
+   │  JQuery AST  │   │    Axioms        │           │  • prop_translation_…    │
+   └──────┬───────┘   └────────┬─────────┘           │  • prop_find_always_…    │
+          │ import             │                      └──────────────┬───────────┘
+          ▼                    │                                     │ import
+   ┌──────────────┐            │                                     ▼
+   │ SqlGenMain   │            │                            ┌──────────────────┐
+   │ .lean        │            │                            │ PropRunner.lean  │
+   │  main : IO   │            │                            │  for each prop:  │
+   │  • parse jq  │            │                            │   Plausible.     │
+   │  • apply     │            │                            │   Testable.      │
+   │   jquery_to_ │            │                            │   checkIO        │
+   │   squery     │            │                            │  → TestResult    │
+   │  • eval both │            │                            │  emit JSON array │
+   │   sides on   │            │                            │  main : IO       │
+   │   seedDB     │            │                            └────────┬─────────┘
+   │  • emit JSON │            │                                     │
+   └──────┬───────┘            │ lake build                          │ lake build
+          │                    ▼                                     ▼
+          │ lake build   ┌──────────────────┐                  ┌──────────────────┐
+          ▼              │   proofTrace     │                  │   propRunner     │
+   ┌──────────────┐      │   (~155 MB exe;  │                  │   (~155 MB exe;  │
+   │  sqlGenMain  │      │   runs once at   │                  │   spawned every  │
+   │  (~155 MB,   │      │   build time;    │                  │   /api/properties│
+   │  spawned per │      │   output cached  │                  │   request)       │
+   │  /api/query) │      │   as proof_      │                  └──────────────────┘
+   └──────────────┘      │   trace.json)    │
+                         └──────────────────┘
 ```
 
-- **`sqlGenMain`** (per query) — `ProofPilot/SqlGenMain.lean`. Takes a jq
-  string, parses to `JQuery`, applies the proven `jquery_to_squery`, prints
-  the SQL, evaluates both sides on the seed database, and returns whether
-  they structurally match.
-- **`propRunner`** (on demand) — `ProofPilot/PropRunner.lean`. Calls
-  `Plausible.Testable.checkIO` on each property in `Properties.lean` against
-  the *deliberately buggy* `eval_jquery` from `Error.lean`; returns each
-  `TestResult` (success / gaveUp / failure-with-counter-example) as JSON.
-- **`proofTrace`** (on demand) — `ProofPilot/ProofTrace.lean`. Loads
-  `Main.olean` at runtime via `Lean.importModules`, walks each named
-  theorem with `Lean.collectAxioms`, pretty-prints the type with
-  `Meta.ppExpr`, and emits a structured JSON report.
+### Python layer — three endpoints, one FastAPI app
 
-The Python backend is *not* doing any proof reasoning. It marshals JSON
-between the React SPA and the three Lean binaries; the Lean kernel is the
-authority for everything labelled "verified" in the UI. Inside the Lean
-infoview the same proof states look like this:
+```
+                                backend/   (FastAPI on uvicorn)
+
+      POST /api/query                GET /api/properties           GET /api/proofs
+            │                                │                            │
+            ▼                                ▼                            ▼
+        run_query()                    properties()                   proofs()
+         (main.py)                      (main.py)                    (main.py)
+            │                                │                            │
+            ├─ llm_client.nl_to_jq           │                            │
+            │   (Anthropic SDK or            │                            │
+            │    keyword-rule mock)          │                            │
+            │                                │                            │
+            ├─ translator.translate          │                            │
+            │   (Python jq→SQL fallback,     │                            │
+            │    used when no Lean binary)   │                            │
+            │                                │                            │
+            ├─ executor.run_jq(USERS)        │                            │
+            │   in-memory eval over          │                            │
+            │   seed_data.USERS              │                            │
+            │                                │                            │
+            ├─ executor.run_sql(sql)         │                            │
+            │   feeds the SQL string to      │                            │
+            │   sqlite3 (in-process, in-mem) │                            │
+            │                                │                            │
+            ├─ lean_client.run_lean(jq)      │                            │
+            │   subprocess.run([sqlGenMain]) │                            │
+            │                                │                            │
+            ├─ proof_witness.build_witness   │                            │
+            │   • reads ProofPilot/Main.lean │                            │
+            │     to extract the proof case  │                            │
+            │     source span (lines 368-528)│                            │
+            │   • merges axiom info from     │                            │
+            │     ProofPilot/proof_trace.json│                            │
+            │                                │                            │
+            ▼                                ▼                            ▼
+                              counterexample_runner.py
+                              ├ collect_counterexamples()         ├ collect_proof_traces()
+                              │   subprocess.run([propRunner])    │   read proof_trace.json
+                              │                                   │   (cached snapshot)
+                              ▼                                   ▼
+                          JSON: 4 property results            JSON: 7 verified theorems
+                          with counter-examples               with axiom dependencies
+```
+
+### Frontend layer — three tabs, shared support
+
+```
+                          frontend/src/   (Vite + React + TypeScript)
+
+                                 App.tsx
+                       (top-level state, three tabs)
+                                    │
+              ┌─────────────────────┼─────────────────────────┐
+              │                     │                         │
+        view='query'           view='proofs'           view='properties'
+              │                     │                         │
+              ▼                     ▼                         ▼
+      ┌──────────────┐      ┌──────────────┐         ┌──────────────────┐
+      │ QueryInput   │      │ ProofResults │         │ PropertyResults  │
+      │   .tsx       │      │   .tsx       │         │   .tsx           │
+      │ • textarea   │      │ • fetches    │         │ • fetches        │
+      │ • examples   │      │   /api/proofs│         │   /api/properties│
+      │ • mock       │      │ • renders 7  │         │ • renders 4      │
+      │   toggle     │      │   theorems   │         │   property cards │
+      └──────┬───────┘      │ • axiom chips│         │ • shrunk counter-│
+             │              └──────────────┘         │   example block  │
+             │ onRun(query)                          └──────────────────┘
+             ▼
+     api.ts: runQuery()  ─── POST /api/query ───▶  (backend)
+                                                          │
+                                                          ▼  result
+             ┌────────────────────────────────────────────┘
+             │
+             ▼  rendered as three stacked sections in the Query view:
+       ┌────────────────────┐
+       │   Pipeline.tsx     │  NL ──LLM──▶ jq ──Formally verified──▶ SQL
+       ├────────────────────┤  (Lean-derived)
+       │  SplitResults.tsx  │  table of returned rows
+       ├────────────────────┤
+       │ ProofWitnessPanel  │  per-query proof witness:
+       │   .tsx             │  • case (find/drop/clear/length/…)
+       │                    │  • case_source from Main.lean
+       │                    │  • axiom chips
+       │                    │  • kernel_match: true
+       └────────────────────┘
+
+                          shared support modules
+                          ├ types.ts          TypeScript shapes for all responses
+                          ├ api.ts            typed fetch wrappers
+                          └ DatabaseViewer    modal showing the seed users
+```
+
+### End-to-end — how the three layers talk
+
+```
+   ┌── BROWSER ────────────────────────────────────────────────────────────────────┐
+   │                                                                                │
+   │  React SPA  (served by FastAPI as static assets at /)                          │
+   │                                                                                │
+   │     Query tab        Proofs tab          Property tests tab                    │
+   │       │                  │                       │                              │
+   └───────┼──────────────────┼───────────────────────┼──────────────────────────────┘
+           │                  │                       │
+   POST /api/query    GET /api/proofs        GET /api/properties
+           │                  │                       │
+           ▼                  ▼                       ▼
+   ┌── PYTHON BACKEND  (FastAPI / uvicorn) ────────────────────────────────────────┐
+   │                                                                                │
+   │  main.py routes →   run_query()         proofs()             properties()      │
+   │                          │                  │                     │             │
+   │                          ▼                  ▼                     ▼             │
+   │   llm_client    executor.run_sql      counterexample_runner   counterexample_   │
+   │   nl_to_jq       ──┐                                              runner         │
+   │                    │                                                            │
+   │                    ▼                                                            │
+   │             ╔══════════╗                                                        │
+   │             ║ sqlite3  ║   in-process, in-memory DB —                           │
+   │             ║ (in-mem) ║   the SQL the verified Lean                            │
+   │             ╚══════════╝   path emits is *actually executed* here against       │
+   │                            seed_data.USERS, and the rows go back to the SPA.    │
+   │                                                                                  │
+   └────┬────────────────────────────┬────────────────────┬────────────────────────┘
+        │ subprocess                 │ read file          │ subprocess
+        │ (per query)                │ (cached snapshot)  │ (per request)
+        ▼                            ▼                    ▼
+   ┌── LEAN BINARIES  (compiled by `lake build` from ProofPilot/) ──────────────────┐
+   │                                                                                 │
+   │     sqlGenMain                  proofTrace                propRunner            │
+   │       │                            │                        │                   │
+   │       │  parses jq via             │  Lean.importModules     │  Plausible.       │
+   │       │  jqToJQuery from           │  walks Main.olean       │  Testable.        │
+   │       │  JqGenMain.lean            │  Lean.collectAxioms     │  checkIO over     │
+   │       │  applies                   │  Meta.ppExpr            │  Properties.lean  │
+   │       │  jquery_to_squery          │  emits JSON             │  (which imports   │
+   │       │  from Main.lean (PROVEN)   │  (cached at Docker      │  the buggy        │
+   │       │  evaluates both sides      │  build time as          │  Error.lean)      │
+   │       │  on seedDB                 │  proof_trace.json)      │                   │
+   │       │  emits {sql, kernel_match, │                         │                   │
+   │       │         jquery_case, …}    │                         │                   │
+   │       ▼                            ▼                         ▼                   │
+   │      JSON ──────────────────────────▶ stdout ──────────────────────────────▶    │
+   │                                                                                  │
+   └────────────────────────────────┬─────────────────────────────────────────────────┘
+                                    │
+                                    │ each binary statically links its source modules,
+                                    │ which were kernel-checked at compile time.
+                                    ▼
+   ┌── LEAN SOURCE  (the proofs themselves) ───────────────────────────────────────┐
+   │                                                                                │
+   │   Main.lean                Error.lean                Properties.lean           │
+   │     ⊢ query_equiv             3 seeded bugs            4 prop_* defs           │
+   │     ⊢ permEquiv_implies_…     in eval_jquery           Plausible Arbitrary     │
+   │     ⊢ … (5 more)              (used by Plausible       instances               │
+   │                                to find counter-                                │
+   │                                examples)                                       │
+   └────────────────────────────────────────────────────────────────────────────────┘
+```
+
+The Python backend is the only layer that holds *executable state* —
+the in-memory SQLite database (`executor.run_sql`) is where the SQL the
+Lean binary emitted is actually run. Lean produces *strings* (verified
+SQL) and *facts* (the kernel's verdict on a proof, the axioms a theorem
+depends on); Python is what runs the SQL and serves the verdicts. The
+React layer never touches Lean directly — it only consumes the JSON the
+Python layer assembles.
+
+For comparison, the same proof states the binaries surface look like
+this when opened in the Lean editor:
 
 ![Lean infoview proof state](figures/proof_window.png)
 
@@ -115,7 +308,7 @@ infoview the same proof states look like this:
 | Hop | Producer | Output |
 |---|---|---|
 | 1 | `frontend/src/api.ts:runQuery` | `{natural_language, mock}` |
-| 2 | `backend/main.py:run_query` calls `nl_to_jq` then `translate` then `run_lean` | invokes `sqlGenMain <jq>` |
+| 2 | `backend/main.py:run_query` calls `nl_to_jq` then `run_lean` (Python's `translator.py` is retained as an in-memory fallback when no Lean toolchain is present) | invokes `sqlGenMain <jq>` |
 | 3 | `ProofPilot/SqlGenMain.lean:main` | `{sql, jq, jq_result, sq_result, match, jquery_case, squery_case}` |
 | 4 | `backend/proof_witness.py:build_witness` enriches step 3 | adds `{theorem, theorem_statement, axioms, proofTermDepth, case_translation, case_gloss, case_supporting_lemmas, case_source_lines, case_source, kernel_match, kernel_jq_result, kernel_sq_result}` |
 | 5 | Returned to `frontend/src/components/ProofWitnessPanel.tsx` | rendered as the "Per-query proof witness" panel |
@@ -292,7 +485,9 @@ QueryBridge/
 │
 ├── backend/                            FastAPI + LLM + Lean subprocess driver
 │   ├── main.py                         routes: /api/query /api/properties /api/proofs
-│   ├── translator.py                   Python jq→SQL (mirror of the Lean proof)
+│   ├── translator.py                   Python jq→SQL fallback (used only when
+│   │                                   no Lean binary is available; otherwise
+│   │                                   the Lean-derived SQL is what the UI shows)
 │   ├── executor.py                     run_jq + run_sql on the seed dataset
 │   ├── lean_client.py                  spawns sqlGenMain
 │   ├── llm_client.py                   nl_to_jq via Anthropic SDK or mock
@@ -327,14 +522,18 @@ QueryBridge/
 
 ### Docker
 
+On a fresh machine the entire setup is two steps: install Docker, then:
+
 ```bash
 docker run --rm -p 8000:8000 durwasa/querybridge
 # open http://localhost:8000
 ```
 
-Pulls a prebuilt multi-arch image from Docker Hub (linux/amd64 +
-linux/arm64). Pass `-e ANTHROPIC_API_KEY=…` to swap the mock LLM for
-the live one. To build locally instead of pulling, run
+Docker pulls the prebuilt multi-arch image (`linux/amd64` + `linux/arm64`)
+from Docker Hub on first run, then starts it. No clone, no `lake build`,
+no Python or Node toolchain required. Pass `-e ANTHROPIC_API_KEY=…` to
+swap the mock LLM for the live one. To build locally from this repo
+instead of pulling, run
 `docker build -t querybridge . && docker run --rm -p 8000:8000 querybridge`.
 
 ### Local — three steps

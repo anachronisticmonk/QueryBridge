@@ -12,10 +12,13 @@ export default function Pipeline({ nl, result, loading, error }: Props) {
     return <div className="pipeline-error">{error}</div>
   }
 
-  const showLeanBox = !!result?.lean_sql || (loading && !result)
+  // Lean-derived SQL is the canonical SQL we display. If the Lean
+  // binary isn't available (dev path with no `lake build`), fall back
+  // to the Python translator's string so the box still reads sensibly.
+  const sqlText = result?.lean_sql ?? result?.sql ?? null
 
   return (
-    <div className={`pipeline${showLeanBox ? '' : ' compact'}`}>
+    <div className="pipeline compact">
       {/* Box 1 — Natural Language */}
       <div className="pipeline-box nl">
         <span className="box-label">Natural Language</span>
@@ -47,38 +50,17 @@ export default function Pipeline({ nl, result, loading, error }: Props) {
         <span className="proven-indicator">✓ Proven in Lean 4</span>
       </div>
 
-      {/* Box 3 — SQL */}
-      <div className="pipeline-box sql">
-        <span className="box-label">SQL</span>
+      {/* Box 3 — SQL (Lean-derived) */}
+      <div className="pipeline-box lean-sql">
+        <span className="box-label">SQL (Lean-derived)</span>
         {loading && !result ? (
-          <span className="box-content placeholder loading">translating…</span>
-        ) : result ? (
-          <span className="box-content">{result.sql}</span>
+          <span className="box-content placeholder loading">deriving…</span>
+        ) : sqlText ? (
+          <span className="box-content">{sqlText}</span>
         ) : (
           <span className="box-content placeholder">—</span>
         )}
       </div>
-
-      {showLeanBox && (
-        <>
-          {/* Arrow: Lean-derived (the verified path) */}
-          <div className="pipeline-arrow lean">
-            <span className="arrow-label">Lean 4</span>
-            <span className="arrow-line" />
-            <span className="verified-badge">✓ Proven</span>
-          </div>
-
-          {/* Box 4 — Lean-derived SQL */}
-          <div className="pipeline-box lean-sql">
-            <span className="box-label">SQL (Lean-derived)</span>
-            {loading && !result ? (
-              <span className="box-content placeholder loading">deriving…</span>
-            ) : (
-              <span className="box-content">{result?.lean_sql}</span>
-            )}
-          </div>
-        </>
-      )}
     </div>
   )
 }
