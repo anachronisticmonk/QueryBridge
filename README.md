@@ -4,15 +4,15 @@
 
 # QueryBridge
 
-**Verified jq → SQL translation, kernel-checked in Lean 4.**
+**Verified jq → SQL translation, mechanized in Lean 4.**
 
 Type a query in plain English. A model produces a [jq](https://jqlang.org/)
 expression over the JSON view of the data; the verified Lean binary
 translates that jq into the equivalent SQL over the relational/columnar
 view; the SQL runs on the seed data and the answer is shown alongside the
 proof witness for *that specific query*. The translation is **proven
-correct in Lean 4** — every theorem behind it is kernel-checked, and every
-property the proof should rule out is randomly stress-tested by
+correct in Lean 4**, and every property the proof should rule out is
+randomly stress-tested by
 [Plausible](https://github.com/leanprover-community/plausible).
 
 ---
@@ -55,15 +55,13 @@ A typical run:
    jq expression `del(.[] | select(.age < 25))`.
 3. The Lean binary `ProofPilot/jqGenMain` parses the *same* jq into the
    verified `JQuery` AST. The proven-correct `jquery_to_squery` in
-   `ProofPilot/Main` converts the `JQuery` into an `SQuery`, and a second
+   `ProofPilot/Main.lean` converts the `JQuery` into an `SQuery`, and a second
    binary (`ProofPilot/sqlGenMain`) templatizes that value into an executable
    SQL string. The UI shows both translations side-by-side, with the
    Lean-derived one tagged `✓ Proven in Lean 4`.
 4. Both queries run against identical seed data, and the result panels show
    the surviving rows on each side. The proof rules out any case where the
    two panels could disagree.
-
-The end-to-end flow is shown in the GUI screenshot above.
 
 ---
 
@@ -279,7 +277,7 @@ on its own first; the integrated end-to-end picture follows.
    │                                                                                │
    │   Main.lean                Error.lean                Properties.lean           │
    │     ⊢ query_equiv             3 seeded bugs            4 prop_* defs           │
-   │     ⊢ permEquiv_implies_…     in eval_jquery           Plausible Arbitrary     │
+   │     ⊢ result_equiv            in eval_jquery           Plausible Arbitrary     │
    │     ⊢ … (5 more)              (used by Plausible       instances               │
    │                                to find counter-                                │
    │                                examples)                                       │
@@ -296,41 +294,11 @@ Python layer assembles.
 
 ---
 
-## The conversation, in detail
+## Property-based testing
 
-### 5.1 Per-query verified-SQL flow — `POST /api/query`
-
-| Hop | Producer | Output |
-|---|---|---|
-| 1 | `frontend/src/api.ts:runQuery` | `{natural_language, mock}` |
-| 2 | `backend/main.py:run_query` calls `nl_to_jq` then `run_lean` (Python's `translator.py` is retained as an in-memory fallback when no Lean toolchain is present) | invokes `sqlGenMain <jq>` |
-| 3 | `ProofPilot/SqlGenMain.lean:main` | `{sql, jq, jq_result, sq_result, match, jquery_case, squery_case}` |
-| 4 | `backend/proof_witness.py:build_witness` enriches step 3 | adds `{theorem, theorem_statement, axioms, proofTermDepth, case_translation, case_gloss, case_supporting_lemmas, case_source_lines, case_source, kernel_match, kernel_jq_result, kernel_sq_result}` |
-| 5 | Returned to `frontend/src/components/ProofWitnessPanel.tsx` | rendered as the "Per-query proof witness" panel |
-
-The key emission from Lean is `match` (renamed `kernel_match` in the
-backend) — `true` iff `eval_jquery seedDB jq` and
-`eval_squery sd (jquery_to_squery jq)` reduce to structurally equal values.
-That is the actual per-query *proof witness*: a closed term inhabiting the
-specific instance of `result_equiv` that the universal theorem governs.
-
-The Python side never re-derives this. It maps the `jquery_case` tag (one
-of `find / drop / prepend / clear / length / modify`) to the corresponding
-arm of the `cases jq` block in `Main.lean`'s proof of `query_equiv`, reads
-that source span from disk, and ships it to the UI alongside the supporting
-lemmas the case relies on. The mapping table lives in
-`backend/proof_witness.py:_CASES`.
-
-### 5.2 Property-based testing flow — `GET /api/properties`
-
-| Hop | Producer | Output |
-|---|---|---|
-| 1 | `frontend/src/components/PropertyResults.tsx` mounts | calls `fetchProperties()` |
-| 2 | `backend/main.py:properties` → `counterexample_runner.collect_counterexamples` | spawns `propRunner` |
-| 3 | `ProofPilot/PropRunner.lean:main` calls `Testable.checkIO` per property | per-item: `{id, title, prop, description, bug, status, counterExample?, shrinks?, gaveUpAfter?}` |
-| 4 | `PropertyResults.tsx` | renders one card per property; failures show the shrunk counter-example |
-
-Four properties are checked, defined in `ProofPilot/Properties.lean`:
+Plausible verifies four properties over randomly generated inputs, defined
+in `ProofPilot/Properties.lean`. Each one fails on `Error.lean`'s seeded
+bugs and passes on `Main.lean`'s correct evaluator.
 
 | Property | What it asserts | Bug it catches in `Error.lean` |
 |---|---|---|
@@ -339,39 +307,12 @@ Four properties are checked, defined in `ProofPilot/Properties.lean`:
 | `prop_translation_correct`    | Headline jq ↔ SQL equivalence (boolean) | Triggered by *any* of the three bugs |
 | `prop_find_always_is_identity`| `JQuery.find Col.all Cond.always = jd`  | `eval_jquery (find _ c) = jd.filter (¬c)` (predicate inverted) |
 
-#### 5.2.1 Why the counter-examples are real
-
-`PropRunner.lean` runs each property with Plausible's default
-`Configuration{}` — no `randomSeed` is fixed. Plausible's RNG is initialised
-from system entropy at process start, so successive runs find *different*
-shrunk minimums for the same property. That is the same behaviour you see
-opening `Test.lean` in the Lean editor, which calls `Testable.check` (not
-`checkIO`) with the same default config. The counter-examples are not
-hard-coded; the property is genuinely false on `Error.lean`'s
-`eval_jquery`, so every run finds *some* witness.
-
-### 5.3 Verified-theorems flow — `GET /api/proofs`
-
-| Hop | Producer | Output |
-|---|---|---|
-| 1 | `frontend/src/components/ProofResults.tsx` mounts | calls `fetchProofs()` |
-| 2 | `backend/main.py:proofs` → `collect_proof_traces` | spawns `lake env proofTrace` |
-| 3 | `ProofPilot/ProofTrace.lean:main` does `importModules`, `Meta.ppExpr`, `Lean.collectAxioms` | per-theorem: `{name, title, description, kind, type, status, axioms, proofTermDepth}` |
-| 4 | `ProofResults.tsx` | renders one card per theorem; chips for each axiom; sorry warning if `sorryAx ∈ axioms` |
-
-`status` is `verified` iff `sorryAx` is **not** in the transitive axiom set
-the kernel computed — the same criterion `#print axioms` uses. The seven
-curated theorems are listed in `ProofTrace.lean:thmSpecs`; the headline
-`query_equiv` rests on the three Lean foundational axioms (`propext`,
-`Quot.sound`, `Classical.choice`) and nothing else.
-
-![Proofs tab](figures/proof_trace.png)
-
----
-
-## Counter-example flow — the punchline of property-based testing
-
-The standalone story behind §5.2: *we never write the counter-examples by hand*.
+When the user opens the *Property tests* tab, `PropertyResults.tsx` calls
+`fetchProperties()`, which `backend/main.py:properties` routes to
+`counterexample_runner.collect_counterexamples`. That spawns `propRunner`,
+which runs `Plausible.Testable.checkIO` per property and emits a JSON
+array; the React tab renders one card per property, with the shrunk
+counter-example inlined on failure.
 
 `Error.lean` is a near-duplicate of `Main.lean` with three deliberate bugs
 seeded into `eval_jquery`:
@@ -387,11 +328,16 @@ def eval_jquery (jd : JDB) : JQuery → JResult
   | JQuery.modify _ _ _   => JResult.db []                                 -- !!BUG!! drops everything
 ```
 
-Each of the four properties in `Properties.lean` is universally quantified
-(`∀ jd col v c, …`, `∀ jd jq, …`). Plausible randomly samples from
-`Arbitrary` instances for `JDB`, `JQuery`, etc., and shrinks any failure
-to a minimal counter-example. Open `Test.lean` in your editor and the
-Lean infoview shows the raw output:
+Each of the four properties is universally quantified (`∀ jd col v c, …`,
+`∀ jd jq, …`). Plausible randomly samples from `Arbitrary` instances for
+`JDB`, `JQuery`, etc., and shrinks any failure to a minimal counter-example.
+We never write the counter-examples by hand — the runtime is *search*. The
+proof of `query_equiv` is what guarantees Plausible can't find a witness
+when run against the *correct* `eval_jquery` from `Main.lean`; the
+intentional bugs in `Error.lean` are how we demonstrate the search machinery
+actually works.
+
+Open `Test.lean` in your editor and the Lean infoview shows the raw output:
 
 ![Plausible counter-example in the Lean editor](figures/plausible.png)
 
@@ -399,42 +345,14 @@ Hit the *Property tests* tab in the UI for the structured form:
 
 ![Property tests tab](figures/plausible_ui.png)
 
-The user inspecting QueryBridge never has to *construct* a database that
-falsifies the property. The runtime is *search*. The proof of `query_equiv`
-in `Main.lean` is what guarantees Plausible can't find any counter-example
-when run against the *correct* `eval_jquery` from `Main.lean` — and the
-intentional bugs in `Error.lean` are how we demonstrate the search
-machinery actually works.
+#### Why the counter-examples are real
 
----
-
-## Per-query proof witness — what's proven *for this query*
-
-The companion to the counter-example flow. When the user runs a specific
-query, the UI doesn't show "the proof of `query_equiv`" in some abstract
-sense — it shows the *case of the proof* that governs this query, the
-specific lemmas it depends on, and the kernel's verdict for *this* input.
-
-![Lean infoview during a per-query proof](figures/proof_window_updated.png)
-
-The proof of `query_equiv` is by `cases jq`: each `JQuery` constructor gets
-its own arm. `sqlGenMain` reports which constructor your jq parsed to;
-`backend/proof_witness.py` looks the line range up:
-
-| Query type | jq case | SQuery case | `Main.lean` line span |
-|---|---|---|---|
-| `find`    | `JQuery.find c p`     | `SQuery.select c p`     | 368–403 |
-| `drop`    | `JQuery.drop p`       | `SQuery.delete p`       | 405–460 |
-| `prepend` | `JQuery.prepend u`    | `SQuery.insert (toS u)` | 462–499 |
-| `clear`   | `JQuery.clear`        | `SQuery.truncate`       | 501–505 |
-| `length`  | `JQuery.length`       | `SQuery.count`          | 507–511 |
-| `modify`  | `JQuery.modify col v c` | `SQuery.update col v c` | 513–528 |
-
-The `kernel_match` flag in the response comes from sqlGenMain actually
-running both `eval_jquery` and `eval_squery` on the seed data and comparing
-the structural results. For all six cases against the *correct* `Main.lean`
-evaluator, `kernel_match` is always `true` — which is the per-query
-inhabitant of `result_equiv (eval_jquery seedDB jq) (eval_squery sd (jquery_to_squery jq))`.
+`PropRunner.lean` runs each property with Plausible's default
+`Configuration{}` — no `randomSeed` is fixed. Plausible's RNG is initialised
+from system entropy at process start, so successive runs find *different*
+shrunk minimums for the same property. The counter-examples are not
+hard-coded; the property is genuinely false on `Error.lean`'s `eval_jquery`,
+so every run finds *some* witness.
 
 ---
 
